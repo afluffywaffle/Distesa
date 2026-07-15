@@ -51,7 +51,7 @@ Maven Central, so `settings.gradle.kts` adds that repository.
   `webRequestBlocking` + `<all_urls>` — the same capability uBlock uses). `images.js`
   (content script, `document_start`; MutationObserver for late nodes) shows sized
   tap-to-load placeholders in their place. One combined **media policy**, cycled by
-  the overlay button:
+  the Images row in the ⚙ settings panel:
   - **hide-all** — everything blocked; tapping a placeholder dismisses it.
   - **placeholder-tap** (default) — everything blocked; tapping loads that one item
     (its URL is added to the allowlist, then the fetch is re-triggered).
@@ -86,16 +86,26 @@ Maven Central, so `settings.gradle.kts` adds that repository.
   `webExtensionController.list()` (matching add-on id `uBlock0@raymondhill.net`)
   instead of re-installing. Network/install failures log and leave the app
   usable — they do not crash.
-- Exposes two **minimal on-device overlay buttons** (top-right, stacked; no
-  settings UI yet):
-  - `uBO: on` / `uBO: off` — flips uBlock via `enable/disable(ext,
-    EnableSource.USER)` and reloads, so the ad-blocking effect appears/disappears.
-  - `IMG: <policy>` — cycles this domain's image policy
-    (hide-all → tap → primary → all → …). Since native code can't write
-    `browser.storage.local`, the button pushes `{type:"cyclePolicy"}` down the
-    **eink port** (see below); `images.js` computes the next policy, persists it,
-    and reloads. `images.js` reports its current policy back up the port so the
-    button can label itself.
+- **Minimal, mostly-hidden navigation chrome.** Default state is just the page —
+  nothing floats. A thin full-width transparent **reveal strip** across the very
+  top (~56dp, small enough not to swallow the page-flip taps) toggles a slim
+  greyscale **chrome bar** (instant, no animation): `‹` back · editable URL/search
+  field · `⟳` reload · `⚙` settings. The bar **auto-hides** after a navigation
+  (Go/back/reload), after ~4s idle (`Handler` timer), and when you tap in the page
+  area below it (the root's `dispatchTouchEvent` dismisses without stealing the tap
+  from the page). The URL field (IME **Go**) is **URL-or-search**: text starting
+  with `http`, or containing a dot and no spaces, loads as a URL (`https://`
+  prepended when schemeless) via `session.loadUri`; anything else becomes a
+  `https://duckduckgo.com/?q=…` search. Back = `GeckoSession.goBack()` with
+  `canGoBack` tracked via `NavigationDelegate.onCanGoBack` (button hidden when
+  false); reload = `session.reload()`; the field syncs to the page URL via
+  `onLocationChange`.
+  - `⚙` opens the **settings panel**, which now also hosts the folded-in
+    **uBlock on/off** toggle (`enable/disable(ext, EnableSource.USER)` + reload)
+    and the **image-policy cycle** row (hide-all → tap → primary → all, pushing
+    `{type:"cyclePolicy"}` down the eink port; `images.js` persists per-domain and
+    reloads, reporting the current policy back to label the row). No buttons float
+    on the page anymore — all controls live behind the top-edge reveal → ⚙ panel.
 
   **App↔extension messaging (GeckoView 152) — via a background relay:** GeckoView
   exposes native messaging (`connectNative`/`sendNativeMessage`, which reach the
@@ -123,8 +133,8 @@ Maven Central, so `settings.gradle.kts` adds that repository.
   turns and lets the panel do a default partial update otherwise. `RattaEink`
   reflects into Supernote's hidden `EinkManager` and no-ops safely off-device.
   (`EdgeNavView` remains unwired — a later Phase 1 step.)
-- **Settings panel** (⚙ overlay button, third in the top-right stack): tap to
-  show/hide a minimal greyscale panel of e-ink performance levers, all persisted
+- **Settings panel** (opened by `⚙` on the chrome bar): a minimal greyscale panel
+  of e-ink performance levers plus the folded-in uBlock/Images rows, all persisted
   in `SharedPreferences` (`achroma_settings`) and applied live. NOT a reader mode.
   - **Animations off** (default on) — content-script CSS
     (`*{animation/transition:none;scroll-behavior:auto}`) injected/removed by
@@ -203,15 +213,19 @@ notes/measurements as you go):
 | Tap right third → next page (instant jump, clean refresh) | |
 | Tap left third → previous page | |
 | Tap middle third → no page flip (links still work) | |
+| Default view has NO chrome; tapping the top strip reveals the bar | |
+| Chrome bar auto-hides after nav / ~4s idle / tapping the page | |
+| URL field: typed host loads as URL; plain words → DuckDuckGo search | |
+| Back button appears only when there's history; `‹` goes back | |
 | uBlock installs from AMO (logcat: "uBlock installed") | |
-| `uBO: on/off` toggle changes ad blocking after reload | |
-| `IMG:` button shows current policy (default `tap`) once page loads | |
+| ⚙ panel: `uBlock: on/off` row changes ad blocking after reload | |
+| ⚙ panel: `Images:` row shows current policy (default `tap`) | |
 | Blocked images/video produce NO network fetch (logcat/devtools: request cancelled, not just hidden) | |
 | logcat "[eink-bg] network media-block active" appears at startup | |
-| Cycle `IMG:` → `hidden`: all images become "🖼 image hidden" boxes | |
-| Cycle `IMG:` → `tap`: boxes say "tap to load"; tapping one triggers the fetch + loads | |
-| Cycle `IMG:` → `primary`: main/large image loads, ads/thumbs stay placeholders | |
-| Cycle `IMG:` → `all`: every image loads normally | |
+| Cycle Images → `hidden`: all images become "🖼 image hidden" boxes | |
+| Cycle Images → `tap`: boxes say "tap to load"; tapping one triggers the fetch + loads | |
+| Cycle Images → `primary`: main/large image loads, ads/thumbs stay placeholders | |
+| Cycle Images → `all`: every image loads normally | |
 | `<video>` blocked (no media fetch) until tapped; video-embed iframes show "▶ tap to load" | |
 | Media policy persists per-domain across reloads/relaunch | |
 | Refresh / ghosting quality on page flip (subjective) | |

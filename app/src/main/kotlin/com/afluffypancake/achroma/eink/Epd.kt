@@ -86,9 +86,9 @@ class Epd {
          * A full clean clear is forced once every this many page turns.
          * TODO(Phase 1 settings): surface this as a user setting — the ideal cadence
          * depends on the panel + whether the Supernote's own global refresh is also
-         * running. Currently 10 for on-device testing.
+         * running. Default 6; adjustable live via the settings panel stepper.
          */
         @Volatile
-        var FULL_EVERY = 10
+        var FULL_EVERY = 6
     }
 }

@@ -1,16 +1,25 @@
 package com.afluffypancake.achroma
 
 import android.app.Activity
+import android.content.Context
 import android.content.SharedPreferences
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
+import android.text.InputType
 import android.util.Log
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.Button
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.Switch
+import java.net.URLEncoder
 import org.mozilla.geckoview.ContentBlocking
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
@@ -54,12 +63,21 @@ class MainActivity : Activity() {
     private lateinit var settingsPanel: LinearLayout
     private lateinit var cadenceBtn: Button
 
+    // Minimal, mostly-hidden navigation chrome (see buildChromeBar()).
+    private lateinit var chromeBar: LinearLayout
+    private lateinit var urlField: EditText
+    private lateinit var backBtn: Button
+    private var canGoBack = false
+    private var currentUrl: String? = null
+    private val ui = Handler(Looper.getMainLooper())
+    private val autoHide = Runnable { hideChrome() }
+
     // E-ink performance levers (persisted in SharedPreferences; see loadSettings()).
     private var animOff = true          // inject animation/transition-killing CSS
     private var blockFonts = true       // block web-font requests (system fallback)
     private var strictTp = true         // engine strict tracking protection
     private var jsEnabled = true        // per-session JavaScript
-    private var fullEvery = 10          // EPD full-clear cadence (0 = Off)
+    private var fullEvery = 6           // EPD full-clear cadence (0 = Off)
 
     // Load-time measurement.
     private var pageStartMs = 0L
@@ -110,54 +128,41 @@ class MainActivity : Activity() {
         view = GeckoView(this)
         view.setSession(session)
 
-        // Wrap the GeckoView so we can overlay a minimal on/off control.
-        val root = FrameLayout(this)
-        root.addView(view)
-        toggle = Button(this).apply {
-            text = "uBO: …"
-            isEnabled = false
-            setOnClickListener { onToggleClicked() }
-        }
-        root.addView(
-            toggle,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP or Gravity.END,
-            ),
-        )
-        // Second overlay button: cycles the current domain's image policy. Sits
-        // just below the uBO button (same minimal style).
-        imgToggle = Button(this).apply {
-            text = "IMG: …"
-            isEnabled = false
-            setOnClickListener { onCycleImagePolicy() }
-        }
-        root.addView(
-            imgToggle,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP or Gravity.END,
-            ).apply { topMargin = 140 },
-        )
-        // Third overlay button: gear that shows/hides the settings panel.
-        val gear = Button(this).apply {
-            text = "⚙"
-            setOnClickListener {
-                settingsPanel.visibility =
-                    if (settingsPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        // Default state = NOTHING but the page. All chrome is hidden and surfaced
+        // only via a thin transparent tap-strip at the very top. A tap anywhere in
+        // the page area (below the bar) dismisses the chrome, so it stays out of
+        // the way. (dispatchTouchEvent lets the page still receive that tap.)
+        val root = object : FrameLayout(this) {
+            override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+                if (ev.actionMasked == MotionEvent.ACTION_DOWN &&
+                    chromeBar.visibility == View.VISIBLE && ev.y > chromeBar.bottom &&
+                    !pointInPanel(ev)
+                ) {
+                    hideChrome()
+                }
+                return super.dispatchTouchEvent(ev)
             }
         }
+        root.addView(view)
+
+        // Thin full-width transparent reveal strip across the very top (~6%).
+        // Kept small so it never swallows the page-flip left/right-third taps.
+        val revealStrip = View(this).apply { setOnClickListener { toggleChrome() } }
         root.addView(
-            gear,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP or Gravity.END,
-            ).apply { topMargin = 280 },
+            revealStrip,
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dp(56), Gravity.TOP),
         )
-        // The settings panel itself (hidden until the gear is tapped).
+
+        // The slim chrome bar (hidden by default), drawn ABOVE the reveal strip so
+        // its own controls receive taps when it's showing.
+        chromeBar = buildChromeBar()
+        root.addView(
+            chromeBar,
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP),
+        )
+
+        // The settings panel (hidden until ⚙ on the chrome bar is tapped). Now also
+        // hosts the uBlock toggle + image-policy cycle rows (no floating buttons).
         settingsPanel = buildSettingsPanel()
         root.addView(
             settingsPanel,
@@ -165,13 +170,119 @@ class MainActivity : Activity() {
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP or Gravity.END,
-            ).apply { topMargin = 420 },
+            ).apply { topMargin = dp(56) },
         )
         setContentView(root)
 
         session.loadUri(TEST_URL)
 
         ensureUBlock(runtime)
+    }
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    /** True if the touch lands inside the (open) settings panel — don't dismiss then. */
+    private fun pointInPanel(ev: MotionEvent): Boolean {
+        if (!::settingsPanel.isInitialized || settingsPanel.visibility != View.VISIBLE) return false
+        return ev.x >= settingsPanel.left && ev.x <= settingsPanel.right &&
+            ev.y >= settingsPanel.top && ev.y <= settingsPanel.bottom
+    }
+
+    // --- Minimal navigation chrome ------------------------------------------
+
+    private fun buildChromeBar(): LinearLayout {
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(0xF2111111.toInt()) // near-opaque dark grey, no colour
+            setPadding(dp(6), dp(4), dp(6), dp(4))
+            visibility = View.GONE
+        }
+        backBtn = Button(this).apply {
+            text = "‹"
+            isEnabled = false
+            setOnClickListener {
+                if (::session.isInitialized && canGoBack) { session.goBack(); afterNav() }
+            }
+        }
+        urlField = EditText(this).apply {
+            setTextColor(0xFFEEEEEE.toInt())
+            setHintTextColor(0xFF888888.toInt())
+            hint = "Search or enter address"
+            setSingleLine()
+            setSelectAllOnFocus(true)
+            inputType = InputType.TYPE_TEXT_VARIATION_URI
+            imeOptions = EditorInfo.IME_ACTION_GO
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_GO) { submitUrl(text.toString()); true } else false
+            }
+        }
+        val reloadBtn = Button(this).apply {
+            text = "⟳"
+            setOnClickListener { if (::session.isInitialized) { session.reload(); afterNav() } }
+        }
+        val gearBtn = Button(this).apply {
+            text = "⚙"
+            setOnClickListener {
+                settingsPanel.visibility =
+                    if (settingsPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                scheduleAutoHide()
+            }
+        }
+        bar.addView(backBtn)
+        bar.addView(urlField, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        bar.addView(reloadBtn)
+        bar.addView(gearBtn)
+        return bar
+    }
+
+    private fun toggleChrome() {
+        if (chromeBar.visibility == View.VISIBLE) hideChrome() else showChrome()
+    }
+
+    private fun showChrome() {
+        chromeBar.visibility = View.VISIBLE
+        // Reflect the current URL for editing (select-all on focus).
+        currentUrl?.let { urlField.setText(it) }
+        scheduleAutoHide()
+    }
+
+    private fun hideChrome() {
+        ui.removeCallbacks(autoHide)
+        chromeBar.visibility = View.GONE
+        settingsPanel.visibility = View.GONE
+        // Drop focus + keyboard so nothing lingers over the page.
+        urlField.clearFocus()
+        (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+            ?.hideSoftInputFromWindow(urlField.windowToken, 0)
+    }
+
+    /** Restart the ~4s idle auto-hide timer (only while chrome is showing). */
+    private fun scheduleAutoHide() {
+        ui.removeCallbacks(autoHide)
+        ui.postDelayed(autoHide, 4000)
+    }
+
+    /** Called after Go/back/reload — hide the chrome once navigation is under way. */
+    private fun afterNav() = hideChrome()
+
+    /**
+     * URL-or-search: if the text looks like a URL/host (starts with http, or has a
+     * dot and no spaces) load it (prepend https:// when schemeless); otherwise
+     * treat it as a DuckDuckGo search query.
+     */
+    private fun submitUrl(raw: String) {
+        val t = raw.trim()
+        if (t.isEmpty()) return
+        val looksUrl = t.startsWith("http://") || t.startsWith("https://") ||
+            (t.contains(".") && !t.contains(" "))
+        val uri = if (looksUrl) {
+            if (t.startsWith("http://") || t.startsWith("https://")) t else "https://$t"
+        } else {
+            "https://duckduckgo.com/?q=" + URLEncoder.encode(t, "UTF-8")
+        }
+        if (::session.isInitialized) session.loadUri(uri)
+        afterNav()
     }
 
     // --- Settings: persistence + panel + levers -----------------------------
@@ -182,7 +293,7 @@ class MainActivity : Activity() {
         blockFonts = prefs.getBoolean("blockFonts", true)
         strictTp = prefs.getBoolean("strictTp", true)
         jsEnabled = prefs.getBoolean("jsEnabled", true)
-        fullEvery = prefs.getInt("fullEvery", 10)
+        fullEvery = prefs.getInt("fullEvery", 6)
         loginHosts = HashSet(prefs.getStringSet("loginHosts", emptySet()) ?: emptySet())
     }
 
@@ -216,6 +327,27 @@ class MainActivity : Activity() {
             }
             return null // allow the load
         }
+
+        override fun onLocationChange(
+            s: GeckoSession,
+            url: String?,
+            perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>,
+            hasUserGesture: Boolean,
+        ) {
+            currentUrl = url
+            // Keep the (usually hidden) address field in sync when it's not focused.
+            if (::urlField.isInitialized && !urlField.hasFocus()) {
+                url?.let { urlField.setText(it) }
+            }
+        }
+
+        override fun onCanGoBack(s: GeckoSession, value: Boolean) {
+            canGoBack = value
+            if (::backBtn.isInitialized) runOnUiThread {
+                backBtn.isEnabled = value
+                backBtn.visibility = if (value) View.VISIBLE else View.GONE
+            }
+        }
     }
 
     private fun buildSettingsPanel(): LinearLayout {
@@ -244,6 +376,20 @@ class MainActivity : Activity() {
             setOnClickListener { cycleCadence() }
         }
         panel.addView(cadenceBtn)
+        // Folded-in controls (formerly floating buttons): uBlock on/off + image
+        // policy cycle. Behaviour unchanged — only their home moved into the panel.
+        toggle = Button(this).apply {
+            text = "uBlock: …"
+            isEnabled = false
+            setOnClickListener { onToggleClicked() }
+        }
+        panel.addView(toggle)
+        imgToggle = Button(this).apply {
+            text = "Images: …"
+            isEnabled = false
+            setOnClickListener { onCycleImagePolicy() }
+        }
+        panel.addView(imgToggle)
         return panel
     }
 
@@ -411,7 +557,7 @@ class MainActivity : Activity() {
                         val policy = obj.optString("policy")
                         runOnUiThread {
                             imgToggle.isEnabled = true
-                            imgToggle.text = "IMG: ${shortPolicy(policy)}"
+                            imgToggle.text = "Images: ${shortPolicy(policy)}"
                         }
                     }
                     // images.js found a password field on this host → remember it
@@ -545,9 +691,9 @@ class MainActivity : Activity() {
     private fun refreshLabel() {
         val ext = ublock
         toggle.text = when {
-            ext == null -> "uBO: n/a"
-            ext.metaData.enabled -> "uBO: on"
-            else -> "uBO: off"
+            ext == null -> "uBlock: n/a"
+            ext.metaData.enabled -> "uBlock: on"
+            else -> "uBlock: off"
         }
     }
 
