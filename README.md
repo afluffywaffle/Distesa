@@ -132,9 +132,20 @@ Maven Central, so `settings.gradle.kts` adds that repository.
     `document_start` (no flash).
   - **Block web fonts** (default on) — adds request type `font` to the
     `background.js` webRequest block, gated by this setting (system-font fallback).
+    **Icon fonts always pass** (FontAwesome, Material Icons/Symbols, glyphicon,
+    ionicons, lucide, phosphor, icomoon, … — a small `ICON_FONT_PATTERNS` list
+    matched case-insensitively against the URL) so UI glyphs don't turn to tofu.
   - **Strict tracking protection** (default on) — engine-level
     `ContentBlocking`: `EtpLevel.STRICT` + `AntiTracking.STRICT|CRYPTOMINING|`
     `FINGERPRINTING` + `strictSocialTrackingProtection`, applied live then reload.
+    **Auto-relaxes to Standard on login hosts** so sign-in isn't broken: applied
+    per top-level navigation via `NavigationDelegate.onLoadRequest` (earliest
+    hook) — `EtpLevel.DEFAULT` for hosts in a persisted `loginHosts` set (grown
+    when `images.js` detects an `input[type=password]` and reports over the port)
+    or a built-in auth/SSO allowlist (accounts.google.com, login.microsoftonline
+    .com, appleid.apple.com, login.live.com, facebook.com, github.com, auth0.com,
+    okta.com), else the user's global level. First visit to a brand-new login
+    host is Strict until detected — logged as `[eink-diag] login host added …`.
   - **JavaScript** (default on) — `GeckoSessionSettings.setAllowJavascript`, then
     reload.
   - **Full-clear cadence** — button cycling `Epd.FULL_EVERY` over

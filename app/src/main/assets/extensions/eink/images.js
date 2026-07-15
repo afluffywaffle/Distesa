@@ -397,6 +397,7 @@
             });
             port.onDisconnect.addListener(function () { port = null; });
             reportPolicy();
+            checkLogin(); // port is now up — flush any pending login report
         } catch (e) {
             // No native bridge — media gating still works via DOM strip; only the
             // cycle button and network allowlist are unavailable.
@@ -410,6 +411,32 @@
         } catch (e) {
             log("reportPolicy failed: " + e);
         }
+    }
+
+    // --- Login detection ----------------------------------------------------
+    // If the page has a password field, tell native so it can relax tracking
+    // protection to Standard for this host (Strict can break sign-in). Fires at
+    // DOMContentLoaded and on DOM mutations; reports once, when the port is up.
+    var loginReported = false;
+    function checkLogin() {
+        if (loginReported || !port) return;
+        try {
+            if (document.querySelector('input[type="password"]')) {
+                port.postMessage({ type: "loginHost", host: HOST });
+                loginReported = true;
+                log("login host reported: " + HOST);
+            }
+        } catch (e) { log("checkLogin failed: " + e); }
+    }
+    function startLoginWatch() {
+        checkLogin();
+        if (document.readyState === "loading") {
+            document.addEventListener("DOMContentLoaded", checkLogin);
+        }
+        try {
+            new MutationObserver(function () { checkLogin(); })
+                .observe(document.documentElement, { childList: true, subtree: true });
+        } catch (e) { log("login observer failed: " + e); }
     }
 
     function cyclePolicy() {
@@ -444,10 +471,12 @@
                 log("media policy for " + HOST + " = " + policy);
                 connectNative();
                 applyPolicy();
+                startLoginWatch();
             }, function (e) {
                 log("storage.get failed, using default: " + e);
                 connectNative();
                 applyPolicy();
+                startLoginWatch();
             });
         } catch (e) {
             log("start failed: " + e);

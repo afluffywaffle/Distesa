@@ -30,6 +30,24 @@ var BLOCK_TYPES = ["image", "imageset", "media", "font"];
 // Settings lever pushed from the native settings panel (default ON).
 var blockFonts = true;
 
+// Icon fonts are UI glyphs, not body text — blocking them turns buttons/menus
+// into tofu. Always allow a font request whose URL matches one of these
+// (case-insensitive substrings); block other (text) fonts when blockFonts is on.
+var ICON_FONT_PATTERNS = [
+    "fontawesome", "font-awesome", "/fa-", "material-icons", "materialicons",
+    "material-symbols", "glyphicon", "ionicons", "feather", "bootstrap-icons",
+    "octicons", "simple-line-icons", "themify", "elegant", "dashicons",
+    "remixicon", "phosphor", "lucide", "/icomoon", "icons.woff", "iconfont"
+];
+
+function isIconFont(url) {
+    var u = (url || "").toLowerCase();
+    for (var i = 0; i < ICON_FONT_PATTERNS.length; i++) {
+        if (u.indexOf(ICON_FONT_PATTERNS[i]) !== -1) return true;
+    }
+    return false;
+}
+
 // Policy per page-hostname (cache of storage.local, kept coherent live).
 var policyByHost = Object.create(null);
 
@@ -130,9 +148,11 @@ function stateFor(tabId, pageUrl) {
 function onBeforeMedia(details) {
     try {
         // Web fonts are gated by the "Block web fonts" setting only — independent
-        // of the per-domain image policy. Blocked => system-font fallback.
+        // of the per-domain image policy. Blocked => system-font fallback. Icon
+        // fonts (UI glyphs) always pass so buttons/menus don't turn to tofu.
         if (details.type === "font") {
-            return blockFonts ? { cancel: true } : {};
+            if (!blockFonts || isIconFont(details.url)) return {};
+            return { cancel: true };
         }
         seenCount++;
         var b = bucketFor(details.type);

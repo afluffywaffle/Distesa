@@ -65,6 +65,10 @@ class MainActivity : Activity() {
     private var pageStartMs = 0L
     private var pageHost = ""
 
+    // Hosts observed to have a password field — tracking protection is relaxed to
+    // Standard for these (Strict can break sign-in). Persisted; grows over time.
+    private var loginHosts: MutableSet<String> = mutableSetOf()
+
     /** The installed uBlock Origin add-on, once resolved (install or list). */
     private var ublock: WebExtension? = null
     private var busy = false
@@ -101,6 +105,7 @@ class MainActivity : Activity() {
         session.open(runtime)
         session.settings.setAllowJavascript(jsEnabled)
         session.progressDelegate = PerfProgressDelegate
+        session.navigationDelegate = EtpNavigationDelegate
 
         view = GeckoView(this)
         view.setSession(session)
@@ -178,6 +183,39 @@ class MainActivity : Activity() {
         strictTp = prefs.getBoolean("strictTp", true)
         jsEnabled = prefs.getBoolean("jsEnabled", true)
         fullEvery = prefs.getInt("fullEvery", 10)
+        loginHosts = HashSet(prefs.getStringSet("loginHosts", emptySet()) ?: emptySet())
+    }
+
+    /** True if [host] should get Standard (not Strict) tracking protection. */
+    private fun isLoginHost(host: String?): Boolean {
+        if (host.isNullOrEmpty()) return false
+        val h = host.lowercase()
+        if (loginHosts.contains(h)) return true
+        return AUTH_ALLOWLIST.any { h == it || h.endsWith(".$it") || h.endsWith(it) }
+    }
+
+    /**
+     * Apply the correct ETP level for the host about to load: Standard for login/
+     * auth hosts so sign-in isn't broken, otherwise the user's global setting
+     * (Strict by default). Called per-navigation from the NavigationDelegate.
+     */
+    private fun applyEtpForHost(host: String?) {
+        if (isLoginHost(host)) applyTrackingProtection(strict = false) // Standard
+        else applyTrackingProtection(strict = strictTp)
+    }
+
+    /** Sets ETP just before each top-level navigation (earliest per-nav hook). */
+    private val EtpNavigationDelegate = object : GeckoSession.NavigationDelegate {
+        override fun onLoadRequest(
+            s: GeckoSession,
+            request: GeckoSession.NavigationDelegate.LoadRequest,
+        ): GeckoResult<org.mozilla.geckoview.AllowOrDeny>? {
+            if (request.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_CURRENT) {
+                val host = try { java.net.URI(request.uri).host } catch (e: Throwable) { null }
+                applyEtpForHost(host)
+            }
+            return null // allow the load
+        }
     }
 
     private fun buildSettingsPanel(): LinearLayout {
@@ -368,11 +406,22 @@ class MainActivity : Activity() {
         override fun onPortMessage(message: Any, port: WebExtension.Port) {
             try {
                 val obj = message as? org.json.JSONObject ?: return
-                if (obj.optString("type") == "policy") {
-                    val policy = obj.optString("policy")
-                    runOnUiThread {
-                        imgToggle.isEnabled = true
-                        imgToggle.text = "IMG: ${shortPolicy(policy)}"
+                when (obj.optString("type")) {
+                    "policy" -> {
+                        val policy = obj.optString("policy")
+                        runOnUiThread {
+                            imgToggle.isEnabled = true
+                            imgToggle.text = "IMG: ${shortPolicy(policy)}"
+                        }
+                    }
+                    // images.js found a password field on this host → remember it
+                    // so tracking protection relaxes to Standard for its loads.
+                    "loginHost" -> {
+                        val host = obj.optString("host")
+                        if (host.isNotEmpty() && loginHosts.add(host)) {
+                            prefs.edit().putStringSet("loginHosts", loginHosts).apply()
+                            Log.i(TAG, "[eink-diag] login host added -> $host (ETP relaxed to standard)")
+                        }
                     }
                 }
             } catch (e: Throwable) {
@@ -541,6 +590,18 @@ class MainActivity : Activity() {
 
         /** EPD full-clear cadence steps cycled by the settings button (0 = Off). */
         private val CADENCE_STEPS = intArrayOf(0, 4, 6, 8, 10, 15)
+
+        /** Common auth/SSO hosts always treated as Standard TP (suffix match). */
+        private val AUTH_ALLOWLIST = listOf(
+            "accounts.google.com",
+            "login.microsoftonline.com",
+            "appleid.apple.com",
+            "login.live.com",
+            "facebook.com",
+            "github.com",
+            "auth0.com",
+            "okta.com",
+        )
 
         /**
          * Text-based, low-JS, reliably scrollable page — makes tap-to-flip (and
