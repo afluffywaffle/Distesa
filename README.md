@@ -4,20 +4,22 @@ Achroma is a minimal, e-ink-first web browser for the Supernote Nomad and Manta
 (RK3566, Android 11). It aims to be a fast, low-ghosting, ad-free reading browser
 tuned for a monochrome EPD panel: no chrome clutter, greyscale-safe affordances,
 edge-tap navigation, and a rendering path that drives the Supernote EPD refresh
-waveforms directly. This repository is the Phase 0 spike.
+waveforms directly.
 
-## Phase 0 — the dual-engine gate
+## Engine decision — GeckoView (Phase 0 closed)
 
-Phase 0 evaluates two browser engines side by side before committing to one:
+**GeckoView is the engine.** Phase 0 was scoped as a two-engine gate (Spike A
+GeckoView vs Spike B WebView), but the decision was made without building Spike B:
 
-- **Spike A — GeckoView** (this repo): Mozilla's Gecko engine, which supports
-  real WebExtensions and therefore uBlock Origin as a true content blocker.
-- **Spike B — Android WebView**: the OS-bundled engine (smaller, no extension
-  support; ad blocking via request interception only).
+- **GeckoView viability on the Nomad is already proven** — the user runs Fennec
+  (Firefox for Android, a GeckoView app) on the device today.
+- **Only GeckoView can run WebExtensions.** Android's WebView cannot load
+  extensions at all, so uBlock Origin (real content blocking) and our own bundled
+  page-flip extension are impossible on it — ad blocking there would be limited to
+  crude request interception.
 
-The gate decision compares RAM footprint, cold start, page-load time, and — most
-important on e-ink — refresh/ghosting quality. Fill in the metrics table below
-from on-device runs of each spike, then pick the engine to build Phase 1 on.
+Spike B (WebView) was therefore **skipped**. We are now in **Phase 1**, building
+on GeckoView.
 
 ### GeckoView version
 
@@ -26,12 +28,19 @@ stable release resolved from Mozilla's Maven repo
 (`https://maven.mozilla.org/maven2/`). Note: GeckoView is published there, NOT to
 Maven Central, so `settings.gradle.kts` adds that repository.
 
-## What this spike does
+## What the app does
 
 - Full-screen `GeckoView` backed by a singleton `GeckoRuntime` + `GeckoSession`
   (classic Views, not Compose).
 - Loads a deliberately ad/image-heavy page (`https://www.theverge.com`) so the
   ad-blocking effect is visible.
+- Bundles our own **"eink" WebExtension** (`app/src/main/assets/extensions/eink/`)
+  loaded at startup via `webExtensionController.installBuiltIn(...)`. It ports
+  eita's "Page Scroll" quantized pagination and adapts it for e-ink: a content
+  script gives **tap-to-flip** page turning (tap the left third = previous page,
+  right third = next page, middle third ignored) using instant viewport jumps
+  (`scrollTo` with `behavior:"auto"` — no smooth scroll, which ghosts on EPD).
+  Because we author it, it ships inside the APK — unlike third-party add-ons.
 - Installs uBlock Origin at **runtime from AMO** (not bundled in the APK). On
   first launch it calls `WebExtensionController.install(...)` with the AMO
   "latest" signed xpi:
@@ -82,17 +91,24 @@ On the device, the EPD reflection path requires hidden-API access:
 adb shell settings put global hidden_api_policy 0
 ```
 
-## Phase 0 metrics — fill in on-device
+## On-device sanity checklist
 
-| Metric | GeckoView (Spike A) | WebView (Spike B) |
-|---|---|---|
-| Idle RAM (MB) | | |
-| Cold start (ms) | | |
-| Page load — theverge.com, no blocker (s) | | |
-| Page load — with uBlock (s) | | |
-| APK size (MB) | | |
-| Refresh / ghosting quality (subjective) | | |
-| uBlock / ad blocking supported | yes (WebExtension) | no (request-intercept only) |
+With the debug APK installed on the Nomad/Manta, confirm each of these (record
+notes/measurements as you go):
+
+| Check | Result |
+|---|---|
+| App launches, theverge.com renders | |
+| Idle RAM (MB) | |
+| Cold start (ms) | |
+| Page load — theverge.com (s) | |
+| eink extension loads (logcat: "eink extension installed") | |
+| Tap right third → next page (instant jump, clean refresh) | |
+| Tap left third → previous page | |
+| Tap middle third → no page flip (links still work) | |
+| uBlock installs from AMO (logcat: "uBlock installed") | |
+| `uBO: on/off` toggle changes ad blocking after reload | |
+| Refresh / ghosting quality on page flip (subjective) | |
 
 ## Build config (mirrors layuv android_native, known-good)
 

@@ -51,6 +51,11 @@ class MainActivity : Activity() {
         // Auto-approve add-on install + permission prompts (test spike only).
         runtime.webExtensionController.promptDelegate = AutoApprovePromptDelegate
 
+        // Our OWN bundled extension (page-flip). Unlike uBlock (a third-party
+        // add-on installed at runtime from AMO), we author this one so it ships
+        // inside the APK and loads via installBuiltIn from assets.
+        installEink(runtime)
+
         session = GeckoSession()
         session.open(runtime)
 
@@ -76,6 +81,22 @@ class MainActivity : Activity() {
         session.loadUri(TEST_URL)
 
         ensureUBlock(runtime)
+    }
+
+    /**
+     * Install our bundled "eink" WebExtension (tap-to-flip pagination) from
+     * assets. installBuiltIn is idempotent across launches. Failure logs and
+     * leaves the app usable.
+     */
+    private fun installEink(runtime: GeckoRuntime) {
+        try {
+            runtime.webExtensionController.installBuiltIn(EINK_URI).accept(
+                { ext -> Log.i(TAG, "eink extension installed: ${ext?.id}") },
+                { e -> Log.w(TAG, "eink extension install failed: ${e?.message}") },
+            )
+        } catch (e: Throwable) {
+            Log.w(TAG, "eink install threw ${e.javaClass.simpleName}: ${e.message}")
+        }
     }
 
     /**
@@ -196,6 +217,9 @@ class MainActivity : Activity() {
 
         /** Ad/image-heavy test page — a realistic render/refresh workload. */
         private const val TEST_URL = "https://www.theverge.com"
+
+        /** Our bundled page-flip extension, loaded from assets via installBuiltIn. */
+        private const val EINK_URI = "resource://android/assets/extensions/eink/"
 
         /** uBlock Origin's stable add-on id (used to detect an existing install). */
         private const val UBLOCK_ID = "uBlock0@raymondhill.net"
