@@ -23,8 +23,12 @@
 var NATIVE_APP = "browser";
 var DEFAULT_POLICY = "placeholder-tap";
 // image/imageset = <img> + srcset/<picture>; media = <video>/<audio> byte
-// streams and HLS/DASH segment fetches typed as media.
-var BLOCK_TYPES = ["image", "imageset", "media"];
+// streams and HLS/DASH segment fetches typed as media; font = @font-face web
+// fonts (gated by the "Block web fonts" setting, not the image policy).
+var BLOCK_TYPES = ["image", "imageset", "media", "font"];
+
+// Settings lever pushed from the native settings panel (default ON).
+var blockFonts = true;
 
 // Policy per page-hostname (cache of storage.local, kept coherent live).
 var policyByHost = Object.create(null);
@@ -125,6 +129,11 @@ function stateFor(tabId, pageUrl) {
 
 function onBeforeMedia(details) {
     try {
+        // Web fonts are gated by the "Block web fonts" setting only — independent
+        // of the per-domain image policy. Blocked => system-font fallback.
+        if (details.type === "font") {
+            return blockFonts ? { cancel: true } : {};
+        }
         seenCount++;
         var b = bucketFor(details.type);
         b.seen++;
@@ -206,7 +215,12 @@ function openNativePort() {
     try {
         nativePort = browser.runtime.connectNative(NATIVE_APP);
         nativePort.onMessage.addListener(function (msg) {
-            // App -> content (e.g. cyclePolicy). Broadcast to all media ports.
+            // Font-block is a webRequest concern owned by THIS background page.
+            if (msg && msg.type === "settings" && typeof msg.blockFonts === "boolean") {
+                blockFonts = msg.blockFonts;
+            }
+            // App -> content (settings incl. animOff, cyclePolicy). Broadcast to
+            // all media/content ports.
             imgPorts.forEach(function (p) {
                 try { p.postMessage(msg); } catch (e) { log("fanout failed: " + e); }
             });

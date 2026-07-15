@@ -53,6 +53,28 @@
         try { console.log("[eink-images] " + msg); } catch (e) {}
     }
 
+    // --- Animations-off lever (settings) ------------------------------------
+    // Injects a stylesheet that kills animations/transitions/smooth-scroll — all
+    // of which ghost badly on e-ink. Driven by the native settings panel; mirrored
+    // into storage so it applies at document_start on the next load (no flash).
+    var ANIM_STYLE_ID = "eink-anim-off";
+    function applyAnimOff(on) {
+        try {
+            var existing = document.getElementById(ANIM_STYLE_ID);
+            if (on) {
+                if (existing) return;
+                var st = document.createElement("style");
+                st.id = ANIM_STYLE_ID;
+                st.textContent =
+                    "*,*::before,*::after{animation:none!important;" +
+                    "transition:none!important;scroll-behavior:auto!important}";
+                (document.head || document.documentElement).appendChild(st);
+            } else if (existing) {
+                existing.remove();
+            }
+        } catch (e) { log("applyAnimOff failed: " + e); }
+    }
+
     function absUrl(u) {
         try { return new URL(u, location.href).href; } catch (e) { return u; }
     }
@@ -366,6 +388,12 @@
                 if (!msg) return;
                 if (msg.type === "cyclePolicy") cyclePolicy();
                 else if (msg.type === "allowed" && msg.urls) onAllowed(msg.urls);
+                else if (msg.type === "settings") {
+                    if (typeof msg.animOff === "boolean") {
+                        applyAnimOff(msg.animOff);
+                        try { browser.storage.local.set({ _animOff: msg.animOff }); } catch (e) {}
+                    }
+                }
             });
             port.onDisconnect.addListener(function () { port = null; });
             reportPolicy();
@@ -405,6 +433,12 @@
 
     function start() {
         try {
+            // Apply animations-off ASAP from the mirrored setting (default ON) so
+            // there's no animation flash before the native push arrives.
+            browser.storage.local.get("_animOff").then(function (r) {
+                applyAnimOff(!r || r._animOff !== false);
+            }, function () { applyAnimOff(true); });
+
             browser.storage.local.get(HOST).then(function (res) {
                 if (res && res[HOST]) policy = res[HOST];
                 log("media policy for " + HOST + " = " + policy);

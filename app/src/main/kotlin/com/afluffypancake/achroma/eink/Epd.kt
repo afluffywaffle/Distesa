@@ -51,7 +51,9 @@ class Epd {
      */
     fun pageTurn(view: View): Boolean {
         turnsSinceFullClear++
-        return if (turnsSinceFullClear >= FULL_EVERY) {
+        // FULL_EVERY <= 0 means "Off" — never force a full clear; rely on the
+        // Supernote's own global refresh. Otherwise escalate every FULL_EVERY turns.
+        return if (FULL_EVERY > 0 && turnsSinceFullClear >= FULL_EVERY) {
             turnsSinceFullClear = 0
             fullClear(view)
             true

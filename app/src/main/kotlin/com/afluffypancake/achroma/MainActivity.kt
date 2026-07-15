@@ -1,11 +1,17 @@
 package com.afluffypancake.achroma
 
 import android.app.Activity
+import android.content.SharedPreferences
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
+import android.view.View
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.Switch
+import org.mozilla.geckoview.ContentBlocking
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoRuntimeSettings
@@ -44,6 +50,20 @@ class MainActivity : Activity() {
     private lateinit var view: GeckoView
     private lateinit var toggle: Button
     private lateinit var imgToggle: Button
+    private lateinit var prefs: SharedPreferences
+    private lateinit var settingsPanel: LinearLayout
+    private lateinit var cadenceBtn: Button
+
+    // E-ink performance levers (persisted in SharedPreferences; see loadSettings()).
+    private var animOff = true          // inject animation/transition-killing CSS
+    private var blockFonts = true       // block web-font requests (system fallback)
+    private var strictTp = true         // engine strict tracking protection
+    private var jsEnabled = true        // per-session JavaScript
+    private var fullEvery = 10          // EPD full-clear cadence (0 = Off)
+
+    // Load-time measurement.
+    private var pageStartMs = 0L
+    private var pageHost = ""
 
     /** The installed uBlock Origin add-on, once resolved (install or list). */
     private var ublock: WebExtension? = null
@@ -62,9 +82,15 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        loadSettings()
+
         val runtime = sharedRuntime(this)
         // Auto-approve add-on install + permission prompts (test spike only).
         runtime.webExtensionController.promptDelegate = AutoApprovePromptDelegate
+        // Engine-level tracking protection, applied before the first load.
+        applyTrackingProtection(strictTp)
+        // EPD full-clear cadence lever.
+        Epd.FULL_EVERY = fullEvery
 
         // Our OWN bundled extension (page-flip). Unlike uBlock (a third-party
         // add-on installed at runtime from AMO), we author this one so it ships
@@ -73,6 +99,8 @@ class MainActivity : Activity() {
 
         session = GeckoSession()
         session.open(runtime)
+        session.settings.setAllowJavascript(jsEnabled)
+        session.progressDelegate = PerfProgressDelegate
 
         view = GeckoView(this)
         view.setSession(session)
@@ -108,11 +136,160 @@ class MainActivity : Activity() {
                 Gravity.TOP or Gravity.END,
             ).apply { topMargin = 140 },
         )
+        // Third overlay button: gear that shows/hides the settings panel.
+        val gear = Button(this).apply {
+            text = "⚙"
+            setOnClickListener {
+                settingsPanel.visibility =
+                    if (settingsPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            }
+        }
+        root.addView(
+            gear,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.END,
+            ).apply { topMargin = 280 },
+        )
+        // The settings panel itself (hidden until the gear is tapped).
+        settingsPanel = buildSettingsPanel()
+        root.addView(
+            settingsPanel,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.END,
+            ).apply { topMargin = 420 },
+        )
         setContentView(root)
 
         session.loadUri(TEST_URL)
 
         ensureUBlock(runtime)
+    }
+
+    // --- Settings: persistence + panel + levers -----------------------------
+
+    private fun loadSettings() {
+        prefs = getSharedPreferences("achroma_settings", MODE_PRIVATE)
+        animOff = prefs.getBoolean("animOff", true)
+        blockFonts = prefs.getBoolean("blockFonts", true)
+        strictTp = prefs.getBoolean("strictTp", true)
+        jsEnabled = prefs.getBoolean("jsEnabled", true)
+        fullEvery = prefs.getInt("fullEvery", 10)
+    }
+
+    private fun buildSettingsPanel(): LinearLayout {
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(0xEE222222.toInt()) // semi-opaque dark grey
+            setPadding(28, 20, 28, 20)
+            visibility = View.GONE
+        }
+        panel.addView(makeSwitch("Animations off", animOff) { on ->
+            animOff = on; prefs.edit().putBoolean("animOff", on).apply(); pushSettingsToExtension()
+        })
+        panel.addView(makeSwitch("Block web fonts", blockFonts) { on ->
+            blockFonts = on; prefs.edit().putBoolean("blockFonts", on).apply(); pushSettingsToExtension()
+        })
+        panel.addView(makeSwitch("Strict tracking protection", strictTp) { on ->
+            strictTp = on; prefs.edit().putBoolean("strictTp", on).apply()
+            applyTrackingProtection(on); reloadPage()
+        })
+        panel.addView(makeSwitch("JavaScript", jsEnabled) { on ->
+            jsEnabled = on; prefs.edit().putBoolean("jsEnabled", on).apply()
+            if (::session.isInitialized) session.settings.setAllowJavascript(on); reloadPage()
+        })
+        cadenceBtn = Button(this).apply {
+            text = cadenceLabel()
+            setOnClickListener { cycleCadence() }
+        }
+        panel.addView(cadenceBtn)
+        return panel
+    }
+
+    private fun makeSwitch(label: String, initial: Boolean, onChange: (Boolean) -> Unit): Switch {
+        return Switch(this).apply {
+            text = label
+            setTextColor(0xFFEEEEEE.toInt())
+            isChecked = initial
+            setOnCheckedChangeListener { _, isChecked -> onChange(isChecked) }
+        }
+    }
+
+    private fun cadenceLabel(): String =
+        "Full-clear: " + if (fullEvery <= 0) "Off" else fullEvery.toString()
+
+    private fun cycleCadence() {
+        val idx = CADENCE_STEPS.indexOf(fullEvery).let { if (it < 0) 0 else it }
+        fullEvery = CADENCE_STEPS[(idx + 1) % CADENCE_STEPS.size]
+        prefs.edit().putInt("fullEvery", fullEvery).apply()
+        Epd.FULL_EVERY = fullEvery
+        cadenceBtn.text = cadenceLabel()
+        Log.i(TAG, "[eink-diag] EPD full-clear cadence -> ${cadenceLabel()}")
+    }
+
+    private fun applyTrackingProtection(strict: Boolean) {
+        try {
+            val cb = sharedRuntime(this).settings.contentBlocking
+            if (strict) {
+                cb.setEnhancedTrackingProtectionLevel(ContentBlocking.EtpLevel.STRICT)
+                cb.setAntiTracking(
+                    ContentBlocking.AntiTracking.STRICT or
+                        ContentBlocking.AntiTracking.CRYPTOMINING or
+                        ContentBlocking.AntiTracking.FINGERPRINTING,
+                )
+                cb.setStrictSocialTrackingProtection(true)
+            } else {
+                cb.setEnhancedTrackingProtectionLevel(ContentBlocking.EtpLevel.NONE)
+                cb.setAntiTracking(ContentBlocking.AntiTracking.NONE)
+                cb.setStrictSocialTrackingProtection(false)
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "applyTrackingProtection threw ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    private fun reloadPage() {
+        if (::session.isInitialized) session.reload()
+    }
+
+    /** Push content-script-side levers (animations, font-block gate) to the extension. */
+    private fun pushSettingsToExtension() {
+        val p = einkPort ?: return
+        try {
+            p.postMessage(
+                org.json.JSONObject()
+                    .put("type", "settings")
+                    .put("animOff", animOff)
+                    .put("blockFonts", blockFonts),
+            )
+        } catch (e: Throwable) {
+            Log.w(TAG, "pushSettingsToExtension threw ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    /** Logs per-page load time + the current lever states for on-device A/B. */
+    private val PerfProgressDelegate = object : GeckoSession.ProgressDelegate {
+        override fun onPageStart(s: GeckoSession, url: String) {
+            pageStartMs = SystemClock.elapsedRealtime()
+            pageHost = try { java.net.URI(url).host ?: url } catch (e: Throwable) { url }
+        }
+
+        override fun onPageStop(s: GeckoSession, success: Boolean) {
+            if (pageStartMs <= 0L) return
+            val ms = SystemClock.elapsedRealtime() - pageStartMs
+            pageStartMs = 0L
+            Log.i(
+                TAG,
+                "[eink-perf] page=$pageHost loadMs=$ms" +
+                    " js=${if (jsEnabled) "on" else "off"}" +
+                    " fonts=${if (blockFonts) "blocked" else "on"}" +
+                    " tp=${if (strictTp) "strict" else "off"}" +
+                    " anim=${if (animOff) "off" else "on"}",
+            )
+        }
     }
 
     /**
@@ -178,7 +355,12 @@ class MainActivity : Activity() {
         override fun onConnect(port: WebExtension.Port) {
             einkPort = port
             port.setDelegate(EinkPortDelegate)
-            runOnUiThread { imgToggle.isEnabled = true }
+            runOnUiThread {
+                imgToggle.isEnabled = true
+                // Send content-script levers (animations off, font-block gate) so
+                // the freshly-connected page applies them.
+                pushSettingsToExtension()
+            }
         }
     }
 
@@ -356,6 +538,9 @@ class MainActivity : Activity() {
 
     companion object {
         private const val TAG = "AchromaMain"
+
+        /** EPD full-clear cadence steps cycled by the settings button (0 = Off). */
+        private val CADENCE_STEPS = intArrayOf(0, 4, 6, 8, 10, 15)
 
         /**
          * Text-based, low-JS, reliably scrollable page — makes tap-to-flip (and

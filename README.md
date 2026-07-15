@@ -123,6 +123,27 @@ Maven Central, so `settings.gradle.kts` adds that repository.
   turns and lets the panel do a default partial update otherwise. `RattaEink`
   reflects into Supernote's hidden `EinkManager` and no-ops safely off-device.
   (`EdgeNavView` remains unwired — a later Phase 1 step.)
+- **Settings panel** (⚙ overlay button, third in the top-right stack): tap to
+  show/hide a minimal greyscale panel of e-ink performance levers, all persisted
+  in `SharedPreferences` (`achroma_settings`) and applied live. NOT a reader mode.
+  - **Animations off** (default on) — content-script CSS
+    (`*{animation/transition:none;scroll-behavior:auto}`) injected/removed by
+    `images.js`; pushed over the port and mirrored to `storage` so it applies at
+    `document_start` (no flash).
+  - **Block web fonts** (default on) — adds request type `font` to the
+    `background.js` webRequest block, gated by this setting (system-font fallback).
+  - **Strict tracking protection** (default on) — engine-level
+    `ContentBlocking`: `EtpLevel.STRICT` + `AntiTracking.STRICT|CRYPTOMINING|`
+    `FINGERPRINTING` + `strictSocialTrackingProtection`, applied live then reload.
+  - **JavaScript** (default on) — `GeckoSessionSettings.setAllowJavascript`, then
+    reload.
+  - **Full-clear cadence** — button cycling `Epd.FULL_EVERY` over
+    Off/4/6/8/10/15 (Off = never force a full clear).
+
+  Load-time measurement: a `ProgressDelegate` logs each page as
+  `[eink-perf] page=<host> loadMs=NNNN js=<on/off> fonts=<blocked/on>`
+  `tp=<strict/off> anim=<off/on>` (tag `AchromaMain`) so each lever's effect is
+  readable in logcat.
 
 ## Build
 
