@@ -3,18 +3,33 @@ package com.afluffypancake.achroma
 import android.app.Activity
 import android.os.Bundle
 import android.util.Log
+import android.view.Gravity
+import android.widget.Button
+import android.widget.FrameLayout
+import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
+import org.mozilla.geckoview.WebExtension
+import org.mozilla.geckoview.WebExtensionController
 
 /**
  * Achroma Phase 0 Spike A — the GeckoView engine evaluation.
  *
  * Minimal by design: a single full-screen [GeckoView] backed by a process-wide
  * [GeckoRuntime] singleton and one [GeckoSession]. No tabs, no address bar — that
- * is Phase 1. The goal here is only: launch, load a page, attempt to install
- * uBlock Origin, and be measurable (RAM, cold start, page load, refresh quality)
- * against the parallel WebView spike.
+ * is Phase 1.
+ *
+ * WebExtension support (the whole reason for choosing GeckoView over WebView) is
+ * exercised here by installing uBlock Origin at RUNTIME from AMO
+ * (addons.mozilla.org) via [WebExtensionController.install] — NOT bundled/frozen
+ * into the APK. The add-on is therefore a real, updatable, toggleable add-on, just
+ * as in Firefox for Android. A tiny top-right overlay button flips it on/off so we
+ * can A/B the ad-blocking effect on-device without any browser UI yet.
+ *
+ * Because there is no interactive UI to approve add-on permission prompts, a
+ * [WebExtensionController.PromptDelegate] auto-grants install/permission requests
+ * (acceptable for a test spike — NOT what a shipping build should do).
  *
  * The e-ink refresh modules (eink/) are ported from layuv but NOT yet wired to
  * the Gecko rendering surface — that is Phase 1 work (see eink/ TODOs).
@@ -23,40 +38,122 @@ class MainActivity : Activity() {
 
     private lateinit var session: GeckoSession
     private lateinit var view: GeckoView
+    private lateinit var toggle: Button
+
+    /** The installed uBlock Origin add-on, once resolved (install or list). */
+    private var ublock: WebExtension? = null
+    private var busy = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val runtime = sharedRuntime(this)
-        installUBlock(runtime)
+        // Auto-approve add-on install + permission prompts (test spike only).
+        runtime.webExtensionController.promptDelegate = AutoApprovePromptDelegate
 
         session = GeckoSession()
         session.open(runtime)
 
         view = GeckoView(this)
         view.setSession(session)
-        setContentView(view)
 
-        // A deliberately ad/image-heavy page so the uBlock effect is visible.
+        // Wrap the GeckoView so we can overlay a minimal on/off control.
+        val root = FrameLayout(this)
+        root.addView(view)
+        toggle = Button(this).apply {
+            text = "uBO: …"
+            isEnabled = false
+            setOnClickListener { onToggleClicked() }
+        }
+        val lp = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP or Gravity.END,
+        )
+        root.addView(toggle, lp)
+        setContentView(root)
+
         session.loadUri(TEST_URL)
+
+        ensureUBlock(runtime)
     }
 
     /**
-     * Install uBlock Origin as a built-in WebExtension from assets. This is
-     * wrapped so a MISSING extension (the assets/extensions/ublock/ folder has
-     * only a README placeholder until a real build is dropped in) logs a warning
-     * rather than crashing the spike.
+     * Resolve uBlock: if it's already installed (a prior launch), reuse it;
+     * otherwise install it from AMO. Failures log and leave the app usable.
      */
-    private fun installUBlock(runtime: GeckoRuntime) {
-        try {
-            runtime.webExtensionController
-                .installBuiltIn(UBLOCK_URI)
-                .accept(
-                    { ext -> Log.i(TAG, "uBlock installed: ${ext?.id}") },
-                    { e -> Log.w(TAG, "uBlock install failed (extension missing or invalid?): ${e?.message}") },
-                )
-        } catch (e: Throwable) {
-            Log.w(TAG, "uBlock install threw ${e.javaClass.simpleName}: ${e.message}")
+    private fun ensureUBlock(runtime: GeckoRuntime) {
+        val controller = runtime.webExtensionController
+        controller.list().accept(
+            { installed ->
+                val existing = installed?.firstOrNull { it.id == UBLOCK_ID }
+                if (existing != null) {
+                    Log.i(TAG, "uBlock already installed: ${existing.id}")
+                    onExtResolved(existing)
+                } else {
+                    installUBlock(controller)
+                }
+            },
+            { e ->
+                Log.w(TAG, "list() failed (${e?.message}); attempting install anyway")
+                installUBlock(controller)
+            },
+        )
+    }
+
+    private fun installUBlock(controller: WebExtensionController) {
+        Log.i(TAG, "Installing uBlock Origin from AMO: $UBLOCK_XPI")
+        controller.install(UBLOCK_XPI).accept(
+            { ext ->
+                Log.i(TAG, "uBlock installed: ${ext?.id}")
+                onExtResolved(ext)
+            },
+            { e -> Log.w(TAG, "uBlock install failed: ${e?.message}") },
+        )
+    }
+
+    /** Cache the add-on and reflect its current enabled state in the button. */
+    private fun onExtResolved(ext: WebExtension?) {
+        ublock = ext
+        busy = false
+        toggle.isEnabled = ext != null
+        refreshLabel()
+    }
+
+    private fun onToggleClicked() {
+        val ext = ublock ?: return
+        if (busy) return
+        busy = true
+        toggle.isEnabled = false
+        val controller = sharedRuntime(this).webExtensionController
+        val enabled = ext.metaData.enabled
+        val result: GeckoResult<WebExtension> = if (enabled) {
+            controller.disable(ext, WebExtensionController.EnableSource.USER)
+        } else {
+            controller.enable(ext, WebExtensionController.EnableSource.USER)
+        }
+        result.accept(
+            { updated ->
+                Log.i(TAG, "uBlock now ${if (updated?.metaData?.enabled == true) "enabled" else "disabled"}")
+                onExtResolved(updated)
+                // Reload so the (dis)enabled content blocker takes effect on the page.
+                session.reload()
+            },
+            { e ->
+                Log.w(TAG, "toggle failed: ${e?.message}")
+                busy = false
+                toggle.isEnabled = true
+                refreshLabel()
+            },
+        )
+    }
+
+    private fun refreshLabel() {
+        val ext = ublock
+        toggle.text = when {
+            ext == null -> "uBO: n/a"
+            ext.metaData.enabled -> "uBO: on"
+            else -> "uBO: off"
         }
     }
 
@@ -67,14 +164,45 @@ class MainActivity : Activity() {
         super.onDestroy()
     }
 
+    /** Auto-grants install/permission/optional prompts — test spike only. */
+    private object AutoApprovePromptDelegate : WebExtensionController.PromptDelegate {
+        override fun onInstallPromptRequest(
+            extension: WebExtension,
+            permissions: Array<out String>,
+            origins: Array<out String>,
+            dataCollectionPermissions: Array<out String>,
+        ): GeckoResult<WebExtension.PermissionPromptResponse> =
+            GeckoResult.fromValue(WebExtension.PermissionPromptResponse(true, true, true))
+
+        override fun onUpdatePrompt(
+            extension: WebExtension,
+            newPermissions: Array<out String>,
+            newOrigins: Array<out String>,
+            newDataCollectionPermissions: Array<out String>,
+        ): GeckoResult<org.mozilla.geckoview.AllowOrDeny> =
+            GeckoResult.allow()
+
+        override fun onOptionalPrompt(
+            extension: WebExtension,
+            optionalPermissions: Array<out String>,
+            optionalOrigins: Array<out String>,
+            optionalDataCollectionPermissions: Array<out String>,
+        ): GeckoResult<org.mozilla.geckoview.AllowOrDeny> =
+            GeckoResult.allow()
+    }
+
     companion object {
         private const val TAG = "AchromaMain"
 
-        /** Ad/image-heavy test page — makes the uBlock filtering effect visible. */
+        /** Ad/image-heavy test page — a realistic render/refresh workload. */
         private const val TEST_URL = "https://www.theverge.com"
 
-        /** Built-in WebExtension location — see assets/extensions/ublock/README.txt. */
-        private const val UBLOCK_URI = "resource://android/assets/extensions/ublock/"
+        /** uBlock Origin's stable add-on id (used to detect an existing install). */
+        private const val UBLOCK_ID = "uBlock0@raymondhill.net"
+
+        /** AMO "latest" signed xpi for uBlock Origin (302-redirects to the current version). */
+        private const val UBLOCK_XPI =
+            "https://addons.mozilla.org/firefox/downloads/latest/ublock-origin/latest.xpi"
 
         @Volatile private var runtime: GeckoRuntime? = null
 

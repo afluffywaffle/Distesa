@@ -32,10 +32,21 @@ Maven Central, so `settings.gradle.kts` adds that repository.
   (classic Views, not Compose).
 - Loads a deliberately ad/image-heavy page (`https://www.theverge.com`) so the
   ad-blocking effect is visible.
-- Attempts to install uBlock Origin as a built-in WebExtension from
-  `app/src/main/assets/extensions/ublock/`. **You must drop the uBlock Origin
-  extension files into that folder** — see its `README.txt`. If absent, the app
-  logs a warning and runs without blocking (it does not crash).
+- Installs uBlock Origin at **runtime from AMO** (not bundled in the APK). On
+  first launch it calls `WebExtensionController.install(...)` with the AMO
+  "latest" signed xpi:
+  `https://addons.mozilla.org/firefox/downloads/latest/ublock-origin/latest.xpi`.
+  A `PromptDelegate` auto-approves the install/permission prompts (test spike
+  only). On later launches it detects the existing install via
+  `webExtensionController.list()` (matching add-on id `uBlock0@raymondhill.net`)
+  instead of re-installing. Network/install failures log and leave the app
+  usable — they do not crash.
+- Exposes a **minimal on-device toggle**: the GeckoView is wrapped in a
+  `FrameLayout` with a small top-right button labelled `uBO: on` / `uBO: off`.
+  Tapping it flips the add-on via `enable/disable(ext, EnableSource.USER)` and
+  reloads the page so the ad-blocking effect appears/disappears. This is a
+  standalone real add-on — updatable and toggleable, exactly like Firefox for
+  Android — not a frozen bundled extension.
 - Ports the layuv e-ink refresh modules into `eink/` (`RattaEink`, `Epd`,
   `EdgeNavView`), decoupled from the layuv reader. These are **not yet wired** to
   the Gecko surface — that is Phase 1 (see the TODOs in those files).
