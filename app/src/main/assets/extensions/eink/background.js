@@ -1,53 +1,140 @@
 /*
- * Achroma E-Ink — background relay.
+ * Achroma E-Ink — background: network media-block + native relay.
  *
- * WHY THIS EXISTS (GeckoView native-messaging bug fix):
- * GeckoView exposes the native-messaging APIs (runtime.connectNative /
- * runtime.sendNativeMessage) that reach the app's WebExtension.MessageDelegate
- * ONLY to background/extension pages — NOT to content scripts. A content script's
- * runtime.sendMessage/connect() route to the extension's own background context.
- * With no background present, they failed with
- *   "Could not establish connection. Receiving end does not exist."
- * so page flips never reached native and the EPD refresh never fired.
+ * TWO JOBS:
  *
- * This background script is the relay:
- *   content.js  --runtime.sendMessage({flip})-->  here  --sendNativeMessage-->  app.onMessage
- *   images.js   --runtime.connect()------------->  here  <--connectNative--->    app.onConnect
+ * 1) NETWORK BLOCK (the point of task #11/#12). Images AND video/media are gated
+ *    at the NETWORK layer via webRequest.onBeforeRequest([blocking]) so bytes are
+ *    NEVER fetched unless allowed — no "load then hide" race, nothing downloads
+ *    on e-ink until the user taps (or the primary-content heuristic allows). This
+ *    only works from a background page (webRequest is background-only), and only
+ *    for a privileged extension with host + webRequestBlocking permissions — the
+ *    same capability uBlock Origin uses.
  *
- * The app side (MessageDelegate.onMessage / onConnect + Port) is unchanged: it
- * still sees a "flip" message and an image Port under the native app "browser".
+ * 2) NATIVE RELAY (unchanged from before). GeckoView native messaging is
+ *    background-only, so this page bridges the content scripts to the app:
+ *      content.js flip  --sendMessage--> here --sendNativeMessage("browser")--> app.onMessage
+ *      images.js  port  --connect------> here <--connectNative("browser")-----> app.onConnect
  *
- * MV2, vanilla JS. Robust: every hop is guarded so a failure logs and never
- * throws into the page.
+ * MV2, vanilla JS. Robust: if webRequest blocking is unavailable we log and fall
+ * back to the content script's DOM-strip behaviour, so the app still works.
  */
 
 var NATIVE_APP = "browser";
+var DEFAULT_POLICY = "placeholder-tap";
+// image/imageset = <img> + srcset/<picture>; media = <video>/<audio> byte
+// streams and HLS/DASH segment fetches typed as media.
+var BLOCK_TYPES = ["image", "imageset", "media"];
 
-var nativePort = null;
-var imgPorts = new Set();
+// Policy per page-hostname (cache of storage.local, kept coherent live).
+var policyByHost = Object.create(null);
+
+// Per-tab page-load state: the page URL (to detect navigation) and the set of
+// media URLs the user/heuristic has allowed for THIS load. Allowlist is cleared
+// on navigation; the policy itself persists in storage.
+var tabState = Object.create(null); // tabId -> { pageUrl, allow: Set }
+
+var netBlockActive = false;
 
 function log(msg) {
     try { console.log("[eink-bg] " + msg); } catch (e) {}
 }
 
-// Open the long-lived native channel used for the image-policy port. The app's
-// MessageDelegate.onConnect(port) fires for this; app pushes {type:"cyclePolicy"}
-// and we fan it out to the content image scripts. Image policy reports travel the
-// other way (content port -> here -> nativePort -> app PortDelegate).
+function hostOf(url) {
+    try { return new URL(url).hostname || "_local"; } catch (e) { return "_local"; }
+}
+
+function policyFor(host) {
+    return policyByHost[host] || DEFAULT_POLICY;
+}
+
+function stateFor(tabId, pageUrl) {
+    var key = String(tabId);
+    var st = tabState[key];
+    if (!st || (pageUrl && st.pageUrl !== pageUrl)) {
+        st = { pageUrl: pageUrl || (st && st.pageUrl) || "", allow: new Set() };
+        tabState[key] = st;
+    }
+    return st;
+}
+
+// --- Network block -------------------------------------------------------
+
+function onBeforeMedia(details) {
+    try {
+        // The page that owns the request (documentUrl for a subresource); fall
+        // back to originUrl, then the request URL itself.
+        var pageUrl = details.documentUrl || details.originUrl || details.url;
+        var host = hostOf(pageUrl);
+        var policy = policyFor(host);
+
+        if (policy === "load-all") return {}; // allow everything
+
+        var st = stateFor(details.tabId, pageUrl);
+        if (st.allow.has(details.url)) return {}; // explicitly permitted this load
+
+        // hide-all / placeholder-tap / primary-content-only: block by default.
+        return { cancel: true };
+    } catch (e) {
+        log("onBeforeMedia failed (allowing): " + e);
+        return {}; // never break the page: on error, don't block
+    }
+}
+
+function installNetworkBlock() {
+    try {
+        if (!browser.webRequest || !browser.webRequest.onBeforeRequest) {
+            log("webRequest unavailable — falling back to DOM-strip only");
+            return;
+        }
+        browser.webRequest.onBeforeRequest.addListener(
+            onBeforeMedia,
+            { urls: ["<all_urls>"], types: BLOCK_TYPES },
+            ["blocking"]
+        );
+        netBlockActive = true;
+        log("network media-block active for types: " + BLOCK_TYPES.join(","));
+    } catch (e) {
+        log("installNetworkBlock failed — DOM-strip fallback: " + e);
+        netBlockActive = false;
+    }
+}
+
+// --- Policy cache --------------------------------------------------------
+
+function loadPolicies() {
+    try {
+        browser.storage.local.get(null).then(function (all) {
+            if (all) policyByHost = all;
+            log("policy cache loaded (" + Object.keys(policyByHost).length + " hosts)");
+        }, function (e) { log("policy load failed: " + e); });
+    } catch (e) {
+        log("policy load threw: " + e);
+    }
+}
+
+try {
+    browser.storage.onChanged.addListener(function (changes, area) {
+        if (area !== "local") return;
+        for (var host in changes) policyByHost[host] = changes[host].newValue;
+    });
+} catch (e) { log("storage.onChanged unavailable: " + e); }
+
+// --- Native relay --------------------------------------------------------
+
+var nativePort = null;
+var imgPorts = new Set();
+
 function openNativePort() {
     try {
         nativePort = browser.runtime.connectNative(NATIVE_APP);
         nativePort.onMessage.addListener(function (msg) {
-            // App -> content (e.g. cyclePolicy). Broadcast to all image ports;
-            // the active page acts and reloads.
+            // App -> content (e.g. cyclePolicy). Broadcast to all media ports.
             imgPorts.forEach(function (p) {
                 try { p.postMessage(msg); } catch (e) { log("fanout failed: " + e); }
             });
         });
-        nativePort.onDisconnect.addListener(function () {
-            log("native port disconnected");
-            nativePort = null;
-        });
+        nativePort.onDisconnect.addListener(function () { nativePort = null; });
         log("native port opened");
     } catch (e) {
         log("connectNative failed: " + e);
@@ -55,9 +142,7 @@ function openNativePort() {
     }
 }
 
-openNativePort();
-
-// content.js flip -> native (fire-and-forget one-shot). Reaches app.onMessage.
+// content.js flip -> native (fire-and-forget). Reaches app.onMessage.
 browser.runtime.onMessage.addListener(function (msg) {
     try {
         if (msg && msg.type === "flip") {
@@ -67,21 +152,41 @@ browser.runtime.onMessage.addListener(function (msg) {
     } catch (e) {
         log("flip relay failed: " + e);
     }
-    // No response — fire-and-forget.
 });
 
-// images.js port <-> native. The content port's messages (policy reports) relay
-// up to the native port; native pushes (cyclePolicy) relay down via the fanout
-// listener registered in openNativePort().
+// images.js port <-> native + allowlist control.
 browser.runtime.onConnect.addListener(function (port) {
     imgPorts.add(port);
-    log("image content port connected (" + imgPorts.size + " open)");
+    var tabId = (port.sender && port.sender.tab) ? port.sender.tab.id : -1;
+    var pageUrl = (port.sender && port.sender.url) ? port.sender.url : "";
+    log("media content port connected (tab " + tabId + ")");
+
     port.onMessage.addListener(function (msg) {
-        if (nativePort) {
-            try { nativePort.postMessage(msg); } catch (e) { log("uplink failed: " + e); }
+        try {
+            if (msg && msg.type === "allow" && msg.urls) {
+                // Add URLs to this tab's allowlist, THEN tell the content script
+                // it's safe to (re)trigger the fetch. Replying after updating the
+                // set guarantees the block won't cancel the re-request.
+                var st = stateFor(tabId, pageUrl);
+                for (var i = 0; i < msg.urls.length; i++) st.allow.add(msg.urls[i]);
+                port.postMessage({ type: "allowed", urls: msg.urls });
+                return;
+            }
+            if (msg && msg.type === "capabilities") {
+                port.postMessage({ type: "capabilities", netBlock: netBlockActive });
+                return;
+            }
+            // Everything else (policy reports, etc.) relays up to the app.
+            if (nativePort) nativePort.postMessage(msg);
+        } catch (e) {
+            log("port message failed: " + e);
         }
     });
-    port.onDisconnect.addListener(function () {
-        imgPorts.delete(port);
-    });
+    port.onDisconnect.addListener(function () { imgPorts.delete(port); });
 });
+
+// --- Startup -------------------------------------------------------------
+
+loadPolicies();
+installNetworkBlock();
+openNativePort();

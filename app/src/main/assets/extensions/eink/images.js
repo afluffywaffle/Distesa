@@ -1,31 +1,33 @@
 /*
- * Achroma E-Ink — image-policy content script.
+ * Achroma E-Ink — media-policy content script (images + video + embeds).
  *
- * On an e-ink panel, images are expensive (ghosting, slow full refreshes) and
- * often junk (ads, avatars, nav thumbs). This script gates image loading with a
- * per-domain policy, replacing gated <img>s with lightweight tappable text
- * placeholders (no external assets) sized to the image's dimensions to avoid
- * layout shift. Runs at document_start so we can strip src/srcset BEFORE the
- * image begins loading; a MutationObserver catches images added later.
+ * Companion to background.js. The BACKGROUND blocks image/video bytes at the
+ * network layer (webRequest); THIS script shows sized tap-to-load placeholders
+ * in their place and, on tap (or for heuristic "primary" images), asks the
+ * background to allowlist the media URL and then re-triggers the now-permitted
+ * fetch. Because the block is at the network layer, nothing downloads until
+ * allowed — no "load then hide" race.
  *
- * FOUR POLICIES (cycled by the native "IMG:" overlay button):
- *   hide-all             — every <img> becomes a placeholder; nothing loads.
- *                          Tapping a placeholder DISMISSES it (collapses to
- *                          nothing) — a pure declutter/text-reading mode.
- *   placeholder-tap      — (DEFAULT) every <img> becomes a placeholder; tapping
- *                          it LOADS that one image (restore its real src).
- *   primary-content-only — auto-load the heuristic "primary" image(s) (large,
- *                          and/or inside <main>/<article>); everything else
- *                          (ads, icons, avatars, thumbs) becomes a tap-to-load
- *                          placeholder.
- *   load-all             — no-op; images load normally.
+ * WHAT IS GATED:
+ *   - <img>            — network-blocked; placeholder; tap allowlists + loads.
+ *   - <video>/<source>/poster — network-blocked (media); placeholder; tap loads.
+ *   - video-embed <iframe> (YouTube/Vimeo/…) — these arrive as sub_frame, which
+ *     the network block does NOT cover, so they are gated DOM-side: src stripped,
+ *     placeholder shown, tap swaps the real embed back in.
  *
- * Per-domain policy persists in browser.storage.local keyed by hostname.
+ * FOUR POLICIES (one combined media policy for images + video), cycled by the
+ * native "IMG:" button, persisted per-hostname in browser.storage.local:
+ *   hide-all             — everything blocked; tapping a placeholder DISMISSES it.
+ *   placeholder-tap      — (DEFAULT) everything blocked; tap loads that one item.
+ *   primary-content-only — auto-load heuristic "primary" IMAGES (video never auto-
+ *                          loads); everything else stays a tap-to-load placeholder.
+ *   load-all             — no-op; everything loads.
  *
- * Robustness: every per-image operation is wrapped so a failure logs and leaves
- * that image as-is — we never break the page.
+ * The "primary" heuristic uses ATTRIBUTES/LAYOUT only (never naturalWidth — the
+ * image is unloaded, so it has no natural size).
  *
- * Framework-free vanilla JS. MV2.
+ * MV2, vanilla JS. Robust: every per-element op is guarded — we never break the
+ * page; on failure the element is left as-is.
  */
 (function () {
     "use strict";
@@ -34,141 +36,278 @@
     var DEFAULT_POLICY = "placeholder-tap";
     var CYCLE = ["hide-all", "placeholder-tap", "primary-content-only", "load-all"];
 
-    // "Primary" heuristic thresholds.
-    var MIN_PRIMARY_AREA = 200 * 200; // px^2 — below this an image is never primary
-    var LARGEST_FRACTION = 0.6;       // >= this share of the page's biggest image => primary
+    var MIN_PRIMARY_AREA = 200 * 200;
+    var LARGEST_FRACTION = 0.6;
+
+    // iframes we treat as video embeds (gated DOM-side).
+    var VIDEO_EMBED_RE = /(youtube(-nocookie)?\.com|youtu\.be|player\.vimeo\.com|dailymotion\.com|streamable\.com|twitch\.tv|players\.brightcove|wistia)/i;
 
     var policy = DEFAULT_POLICY;
     var observer = null;
     var port = null;
 
+    // url -> [fn]: work waiting for the background to confirm an allow.
+    var pending = Object.create(null);
+
     function log(msg) {
         try { console.log("[eink-images] " + msg); } catch (e) {}
     }
 
-    // --- Dimensions & primary heuristic -------------------------------------
+    function absUrl(u) {
+        try { return new URL(u, location.href).href; } catch (e) { return u; }
+    }
 
-    function imgArea(img) {
-        var w = img.getBoundingClientRect().width ||
-            parseInt(img.getAttribute("width"), 10) || img.naturalWidth || 0;
-        var h = img.getBoundingClientRect().height ||
-            parseInt(img.getAttribute("height"), 10) || img.naturalHeight || 0;
-        return w * h;
+    function srcsetUrls(ss) {
+        var out = [];
+        if (!ss) return out;
+        var parts = ss.split(",");
+        for (var i = 0; i < parts.length; i++) {
+            var tok = parts[i].trim().split(/\s+/)[0];
+            if (tok) out.push(absUrl(tok));
+        }
+        return out;
+    }
+
+    // --- Allowlist round-trip -----------------------------------------------
+
+    function requestAllow(urls, onAllowed) {
+        var abs = [];
+        for (var i = 0; i < urls.length; i++) if (urls[i]) abs.push(absUrl(urls[i]));
+        if (!abs.length) { onAllowed(); return; }
+        // Key the callback on the first url; background echoes the list back.
+        (pending[abs[0]] || (pending[abs[0]] = [])).push(onAllowed);
+        if (port) {
+            try { port.postMessage({ type: "allow", urls: abs }); return; } catch (e) { log("allow post failed: " + e); }
+        }
+        // No port / network block inactive — just run it (DOM-strip fallback).
+        onAllowed();
+    }
+
+    function onAllowed(urls) {
+        for (var i = 0; i < urls.length; i++) {
+            var fns = pending[urls[i]];
+            if (!fns) continue;
+            delete pending[urls[i]];
+            for (var j = 0; j < fns.length; j++) {
+                try { fns[j](); } catch (e) { log("allowed cb failed: " + e); }
+            }
+        }
+    }
+
+    // --- Dimensions & primary heuristic (attributes/layout only) ------------
+
+    function attrArea(el) {
+        var rect = el.getBoundingClientRect();
+        var w = rect.width || parseInt(el.getAttribute("width"), 10) || 0;
+        var h = rect.height || parseInt(el.getAttribute("height"), 10) || 0;
+        return { w: Math.round(w), h: Math.round(h), area: w * h };
     }
 
     function pageMaxArea(imgs) {
         var max = 0;
         for (var i = 0; i < imgs.length; i++) {
-            var a = imgArea(imgs[i]);
+            var a = attrArea(imgs[i]).area;
             if (a > max) max = a;
         }
         return max;
     }
 
-    function isPrimary(img, maxArea) {
-        var area = imgArea(img);
+    function isPrimaryImage(img, maxArea) {
+        var area = attrArea(img).area;
+        var inMain = img.closest && img.closest("main, article, [role='main']");
+        if (inMain) return area === 0 || area >= MIN_PRIMARY_AREA; // content image
         if (area < MIN_PRIMARY_AREA) return false;
-        if (img.closest && img.closest("main, article, [role='main']")) return true;
         return maxArea > 0 && area >= LARGEST_FRACTION * maxArea;
     }
 
-    // --- Placeholder <-> image ----------------------------------------------
+    // --- Placeholder --------------------------------------------------------
 
-    function stashSources(img) {
-        // Preserve everything needed to restore the image later, covering plain
-        // src, responsive srcset, and common lazy-load (data-src/data-srcset).
+    function makePlaceholder(el, label) {
+        var d = attrArea(el);
+        var ph = document.createElement("span");
+        ph.className = "eink-media-ph";
+        ph.style.cssText =
+            "display:inline-flex;align-items:center;justify-content:center;" +
+            "box-sizing:border-box;border:1px solid #999;background:#f2f2f2;" +
+            "color:#555;font:12px/1.3 sans-serif;text-align:center;" +
+            "vertical-align:middle;overflow:hidden;cursor:pointer;" +
+            (d.w ? "width:" + d.w + "px;" : "min-width:80px;") +
+            (d.h ? "height:" + d.h + "px;" : "min-height:40px;");
+        ph.textContent = label;
+        return ph;
+    }
+
+    function insertPlaceholder(el, ph) {
+        el.style.display = "none";
+        if (el.parentNode) el.parentNode.insertBefore(ph, el);
+    }
+
+    function removePlaceholder(el) {
+        var ph = el.previousElementSibling;
+        if (ph && ph.classList && ph.classList.contains("eink-media-ph")) ph.remove();
+        el.style.display = "";
+    }
+
+    // --- <img> --------------------------------------------------------------
+
+    function stashImg(img) {
         if (img.getAttribute("src")) img.dataset.einkSrc = img.getAttribute("src");
         if (img.getAttribute("srcset")) img.dataset.einkSrcset = img.getAttribute("srcset");
         if (img.getAttribute("data-src")) img.dataset.einkDataSrc = img.getAttribute("data-src");
         if (img.getAttribute("data-srcset")) img.dataset.einkDataSrcset = img.getAttribute("data-srcset");
-        // Strip so the browser does not fetch/paint the image.
         img.removeAttribute("src");
         img.removeAttribute("srcset");
         img.removeAttribute("data-src");
         img.removeAttribute("data-srcset");
     }
 
-    function restoreImage(img) {
-        try {
-            if (img.dataset.einkSrcset) img.setAttribute("srcset", img.dataset.einkSrcset);
-            else if (img.dataset.einkDataSrcset) img.setAttribute("srcset", img.dataset.einkDataSrcset);
-            if (img.dataset.einkSrc) img.setAttribute("src", img.dataset.einkSrc);
-            else if (img.dataset.einkDataSrc) img.setAttribute("src", img.dataset.einkDataSrc);
-            img.style.display = "";
-            var ph = img.previousElementSibling;
-            if (ph && ph.classList && ph.classList.contains("eink-img-ph")) ph.remove();
-        } catch (e) {
-            log("restore failed: " + e);
-        }
+    function imgUrls(img) {
+        var src = img.dataset.einkSrc || img.dataset.einkDataSrc || "";
+        var set = img.dataset.einkSrcset || img.dataset.einkDataSrcset || "";
+        var urls = [];
+        if (src) urls.push(absUrl(src));
+        urls = urls.concat(srcsetUrls(set));
+        return { src: src, set: set, urls: urls };
     }
 
-    function makePlaceholder(img, tapLoads) {
-        var rect = img.getBoundingClientRect();
-        var w = Math.round(rect.width || parseInt(img.getAttribute("width"), 10) || 0);
-        var h = Math.round(rect.height || parseInt(img.getAttribute("height"), 10) || 0);
-
-        var ph = document.createElement("span");
-        ph.className = "eink-img-ph";
-        // Inline styles only (no external stylesheet). Greyscale, high-contrast
-        // box with a centered text label — reads fine on an EPD panel.
-        ph.style.cssText =
-            "display:inline-flex;align-items:center;justify-content:center;" +
-            "box-sizing:border-box;border:1px solid #999;background:#f2f2f2;" +
-            "color:#555;font:12px/1.3 sans-serif;text-align:center;" +
-            "vertical-align:middle;overflow:hidden;cursor:pointer;" +
-            (w ? "width:" + w + "px;" : "min-width:80px;") +
-            (h ? "height:" + h + "px;" : "min-height:40px;");
-        ph.textContent = tapLoads ? "🖼 tap to load" : "🖼 image hidden";
-
-        ph.addEventListener("click", function (e) {
-            e.preventDefault();
-            e.stopPropagation();
-            if (tapLoads) restoreImage(img);
-            else ph.remove(); // hide-all: tapping just dismisses the box
-        }, true);
-
-        return ph;
+    function loadImg(img) {
+        var u = imgUrls(img);
+        if (!u.urls.length) return;
+        // Allowlist every candidate (src + all srcset URLs) so whichever the
+        // browser picks is permitted, THEN restore the attributes to fetch.
+        requestAllow(u.urls, function () {
+            try {
+                if (u.set) img.setAttribute("srcset", u.set);
+                if (u.src) img.setAttribute("src", u.src);
+                removePlaceholder(img);
+            } catch (e) { log("loadImg restore failed: " + e); }
+        });
     }
 
-    function placeholderify(img, tapLoads) {
+    function gateImg(img, tapLoads) {
         if (img.dataset.einkDone) return;
         img.dataset.einkDone = "1";
-        stashSources(img);
-        var ph = makePlaceholder(img, tapLoads);
-        img.style.display = "none";
-        if (img.parentNode) img.parentNode.insertBefore(ph, img);
+        stashImg(img);
+        var ph = makePlaceholder(img, tapLoads ? "🖼 tap to load" : "🖼 image hidden");
+        ph.addEventListener("click", function (e) {
+            e.preventDefault(); e.stopPropagation();
+            if (tapLoads) loadImg(img); else ph.remove();
+        }, true);
+        insertPlaceholder(img, ph);
     }
 
-    // --- Apply policy to a set of images ------------------------------------
+    // --- <video> ------------------------------------------------------------
 
-    function applyToImg(img, maxArea) {
+    function stashVideo(v) {
+        if (v.getAttribute("src")) v.dataset.einkSrc = v.getAttribute("src");
+        if (v.getAttribute("poster")) v.dataset.einkPoster = v.getAttribute("poster");
+        v.removeAttribute("src");
+        v.removeAttribute("poster");
+        v.removeAttribute("autoplay");
+        var sources = v.querySelectorAll("source");
+        var list = [];
+        for (var i = 0; i < sources.length; i++) {
+            var s = sources[i].getAttribute("src");
+            if (s) { list.push(s); sources[i].dataset.einkSrc = s; sources[i].removeAttribute("src"); }
+        }
+        v.dataset.einkSources = JSON.stringify(list);
+    }
+
+    function videoUrls(v) {
+        var urls = [];
+        if (v.dataset.einkSrc) urls.push(absUrl(v.dataset.einkSrc));
+        if (v.dataset.einkPoster) urls.push(absUrl(v.dataset.einkPoster));
         try {
-            if (img.dataset.einkDone) return;
-            switch (policy) {
-                case "load-all":
-                    break; // leave everything alone
-                case "hide-all":
-                    placeholderify(img, false);
-                    break;
-                case "placeholder-tap":
-                    placeholderify(img, true);
-                    break;
-                case "primary-content-only":
-                    if (isPrimary(img, maxArea)) return; // auto-load primary
-                    placeholderify(img, true);
-                    break;
+            var list = JSON.parse(v.dataset.einkSources || "[]");
+            for (var i = 0; i < list.length; i++) urls.push(absUrl(list[i]));
+        } catch (e) {}
+        return urls;
+    }
+
+    function loadVideo(v) {
+        var urls = videoUrls(v);
+        requestAllow(urls, function () {
+            try {
+                if (v.dataset.einkSrc) v.setAttribute("src", v.dataset.einkSrc);
+                if (v.dataset.einkPoster) v.setAttribute("poster", v.dataset.einkPoster);
+                var sources = v.querySelectorAll("source");
+                for (var i = 0; i < sources.length; i++) {
+                    if (sources[i].dataset.einkSrc) sources[i].setAttribute("src", sources[i].dataset.einkSrc);
+                }
+                removePlaceholder(v);
+                try { v.load(); } catch (e) {}
+            } catch (e) { log("loadVideo restore failed: " + e); }
+        });
+    }
+
+    function gateVideo(v, tapLoads) {
+        if (v.dataset.einkDone) return;
+        v.dataset.einkDone = "1";
+        stashVideo(v);
+        var ph = makePlaceholder(v, tapLoads ? "▶ tap to load" : "▶ video hidden");
+        ph.addEventListener("click", function (e) {
+            e.preventDefault(); e.stopPropagation();
+            if (tapLoads) loadVideo(v); else ph.remove();
+        }, true);
+        insertPlaceholder(v, ph);
+    }
+
+    // --- video-embed <iframe> (DOM-side; not network-typed as media) --------
+
+    function gateIframe(frame, tapLoads) {
+        if (frame.dataset.einkDone) return;
+        var src = frame.getAttribute("src") || frame.getAttribute("data-src") || "";
+        if (!src || !VIDEO_EMBED_RE.test(src)) return; // only known video embeds
+        frame.dataset.einkDone = "1";
+        frame.dataset.einkSrc = src;
+        frame.removeAttribute("src"); // stops the embed fetching / autoplaying
+        var ph = makePlaceholder(frame, tapLoads ? "▶ tap to load" : "▶ video hidden");
+        ph.addEventListener("click", function (e) {
+            e.preventDefault(); e.stopPropagation();
+            if (tapLoads) {
+                try { frame.setAttribute("src", frame.dataset.einkSrc); removePlaceholder(frame); }
+                catch (err) { log("iframe restore failed: " + err); }
+            } else { ph.remove(); }
+        }, true);
+        insertPlaceholder(frame, ph);
+    }
+
+    // --- Apply policy -------------------------------------------------------
+
+    function gateElement(el, maxAreaForPrimary) {
+        try {
+            if (el.dataset.einkDone) return;
+            if (policy === "load-all") return;
+            var tapLoads = policy !== "hide-all";
+            var tag = el.tagName;
+            if (tag === "IMG") {
+                if (policy === "primary-content-only" && isPrimaryImage(el, maxAreaForPrimary)) {
+                    // Auto-load: still route through the allowlist so the network
+                    // block permits it, but don't show a placeholder.
+                    if (!el.dataset.einkDone) { el.dataset.einkDone = "1"; stashImg(el); loadImg(el); }
+                    return;
+                }
+                gateImg(el, tapLoads);
+            } else if (tag === "VIDEO") {
+                gateVideo(el, tapLoads); // video never auto-primary
+            } else if (tag === "IFRAME") {
+                gateIframe(el, tapLoads);
             }
         } catch (e) {
-            log("applyToImg failed: " + e);
+            log("gateElement failed: " + e);
         }
     }
 
-    function applyToAll(root) {
+    function gateAll(root) {
         if (policy === "load-all") return;
-        var imgs = (root || document).querySelectorAll("img");
-        if (!imgs.length) return;
+        var scope = root || document;
+        var imgs = scope.querySelectorAll("img");
         var maxArea = policy === "primary-content-only" ? pageMaxArea(imgs) : 0;
-        for (var i = 0; i < imgs.length; i++) applyToImg(imgs[i], maxArea);
+        for (var i = 0; i < imgs.length; i++) gateElement(imgs[i], maxArea);
+        var vids = scope.querySelectorAll("video");
+        for (var v = 0; v < vids.length; v++) gateElement(vids[v], 0);
+        var frames = scope.querySelectorAll("iframe");
+        for (var f = 0; f < frames.length; f++) gateElement(frames[f], 0);
     }
 
     function startObserver() {
@@ -180,11 +319,11 @@
                     var node = added[n];
                     if (node.nodeType !== 1) continue;
                     try {
-                        if (node.tagName === "IMG") {
-                            applyToImg(node, 0);
+                        var tag = node.tagName;
+                        if (tag === "IMG" || tag === "VIDEO" || tag === "IFRAME") {
+                            gateElement(node, 0);
                         } else if (node.querySelectorAll) {
-                            var imgs = node.querySelectorAll("img");
-                            for (var i = 0; i < imgs.length; i++) applyToImg(imgs[i], 0);
+                            gateAll(node);
                         }
                     } catch (e) {
                         log("observer node failed: " + e);
@@ -197,42 +336,42 @@
 
     function applyPolicy() {
         try {
-            applyToAll(document);
+            gateAll(document);
             startObserver();
-            // Some images already exist by the time the DOM is interactive; run
-            // once more when the body is ready to catch anything missed at
-            // document_start.
+            // Re-run once layout/attributes are available so the "primary"
+            // heuristic and dimensions are meaningful (nothing is loaded, so this
+            // only reads attributes/getBoundingClientRect).
             if (document.readyState === "loading") {
-                document.addEventListener("DOMContentLoaded", function () { applyToAll(document); });
+                document.addEventListener("DOMContentLoaded", function () { gateAll(document); });
             }
         } catch (e) {
             log("applyPolicy failed: " + e);
         }
     }
 
-    // --- Native bridge (app <-> extension) ----------------------------------
+    // --- Native bridge (via background relay) --------------------------------
     //
-    // The native "IMG:" button cycles this domain's policy. Native cannot write
-    // browser.storage.local, so the flow is: native pushes {type:"cyclePolicy"}
-    // over the port; we compute the next policy, PERSIST it, then reload — the
-    // fresh page load re-reads storage and re-applies. We also push our current
-    // policy up so it can label the button.
-    //
-    // Content scripts can't reach the app directly, so runtime.connect() targets
-    // our background.js, which bridges this port to the app's native Port
-    // (connectNative "browser" ⇄ onConnect). background relays both directions.
+    // The native "IMG:" button cycles this domain's media policy. Native can't
+    // write storage, so: native pushes {type:"cyclePolicy"} over the port; we
+    // compute the next policy, PERSIST it, then reload. We also report the current
+    // policy up so the button can label itself, and use the port to allowlist
+    // tapped/primary media URLs. Content scripts can't reach the app directly, so
+    // runtime.connect() targets background.js, which bridges to the app + owns the
+    // webRequest allowlist.
 
     function connectNative() {
         try {
             port = browser.runtime.connect({ name: "eink-images" });
             port.onMessage.addListener(function (msg) {
-                if (msg && msg.type === "cyclePolicy") cyclePolicy();
+                if (!msg) return;
+                if (msg.type === "cyclePolicy") cyclePolicy();
+                else if (msg.type === "allowed" && msg.urls) onAllowed(msg.urls);
             });
             port.onDisconnect.addListener(function () { port = null; });
             reportPolicy();
         } catch (e) {
-            // No native bridge (e.g. off-GeckoView) — image gating still works,
-            // only the cycle button is unavailable.
+            // No native bridge — media gating still works via DOM strip; only the
+            // cycle button and network allowlist are unavailable.
             log("connect failed: " + e);
         }
     }
@@ -268,16 +407,15 @@
         try {
             browser.storage.local.get(HOST).then(function (res) {
                 if (res && res[HOST]) policy = res[HOST];
-                log("policy for " + HOST + " = " + policy);
-                applyPolicy();
+                log("media policy for " + HOST + " = " + policy);
                 connectNative();
+                applyPolicy();
             }, function (e) {
                 log("storage.get failed, using default: " + e);
-                applyPolicy();
                 connectNative();
+                applyPolicy();
             });
         } catch (e) {
-            // browser.* unavailable — apply the default so the page still gates.
             log("start failed: " + e);
             applyPolicy();
         }

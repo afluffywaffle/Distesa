@@ -80,7 +80,13 @@ class Epd {
     fun region(view: View, left: Int, top: Int, right: Int, bottom: Int) = view.invalidate()
 
     companion object {
-        /** A full clean clear is forced once every this many page turns. */
-        const val FULL_EVERY = 6
+        /**
+         * A full clean clear is forced once every this many page turns.
+         * TODO(Phase 1 settings): surface this as a user setting — the ideal cadence
+         * depends on the panel + whether the Supernote's own global refresh is also
+         * running. Currently 10 for on-device testing.
+         */
+        @Volatile
+        var FULL_EVERY = 10
     }
 }

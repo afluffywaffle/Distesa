@@ -27,5 +27,12 @@
         }
     ],
 
-    "permissions": [ "nativeMessaging", "geckoViewAddons", "storage" ]
+    "permissions": [
+        "nativeMessaging",
+        "geckoViewAddons",
+        "storage",
+        "webRequest",
+        "webRequestBlocking",
+        "<all_urls>"
+    ]
 }

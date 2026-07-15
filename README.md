@@ -43,22 +43,40 @@ Maven Central, so `settings.gradle.kts` adds that repository.
   third = next page, middle third ignored) using instant viewport jumps
   (`scrollTo` with `behavior:"auto"` — no smooth scroll, which ghosts on EPD).
   Because we author it, it ships inside the APK — unlike third-party add-ons.
-- Gates images per-domain via `images.js` (a second content script, run at
-  `document_start` so it strips `src`/`srcset` before load; a MutationObserver
-  catches dynamically-added images). Four policies, cycled by an overlay button:
-  - **hide-all** — every `<img>` → placeholder; nothing loads; tapping a
-    placeholder dismisses it (pure declutter).
-  - **placeholder-tap** (default) — every `<img>` → placeholder; tapping it loads
-    that one image.
-  - **primary-content-only** — auto-loads the heuristic "primary" image(s) (area
-    ≥ 200×200 px **and** either inside `<main>`/`<article>`/`[role=main]` or ≥ 60%
-    of the page's largest image); everything else → tap-to-load placeholder.
-  - **load-all** — no-op.
+- Gates **images and video/media** per-domain, **blocked at the NETWORK layer** so
+  bytes are never fetched until allowed (no "load then hide" race — the whole point
+  on e-ink). `background.js` registers `webRequest.onBeforeRequest([blocking])` for
+  request types `image`/`imageset`/`media` and cancels anything not on a per-tab
+  allowlist (works because the bundled extension is privileged with `webRequest` +
+  `webRequestBlocking` + `<all_urls>` — the same capability uBlock uses). `images.js`
+  (content script, `document_start`; MutationObserver for late nodes) shows sized
+  tap-to-load placeholders in their place. One combined **media policy**, cycled by
+  the overlay button:
+  - **hide-all** — everything blocked; tapping a placeholder dismisses it.
+  - **placeholder-tap** (default) — everything blocked; tapping loads that one item
+    (its URL is added to the allowlist, then the fetch is re-triggered).
+  - **primary-content-only** — auto-loads heuristic "primary" **images** (video is
+    never auto-primary); everything else stays a tap-to-load placeholder.
+  - **load-all** — no-op; everything loads.
 
-  Placeholders are inline text boxes sized to the image's rendered/attributed
-  dimensions (no layout shift, no external assets, "🖼 tap to load" label) and
-  restore `src`/`srcset`/`data-src` on tap. Policy persists in
-  `browser.storage.local` keyed by `location.hostname`, default `placeholder-tap`.
+  **Allowlist coordination:** on tap (or for a primary image) `images.js` sends the
+  media URL(s) to `background.js` over the relay port; the background adds them to
+  that tab's allowlist and replies `allowed`, and only THEN does `images.js` restore
+  the attributes to trigger the now-permitted fetch (ordering guarantees the block
+  won't cancel it). The allowlist is per page-load (cleared on navigation); the
+  policy persists. **"Primary" is chosen without loading** — attributed `width`/
+  `height` or `getBoundingClientRect`, and `<main>`/`<article>`/`[role=main]`
+  membership (never `naturalWidth`, since nothing is fetched): an `<img>` is primary
+  if it's a sized/attribute-less content image inside main/article, or ≥ 200×200 px
+  and ≥ 60% of the page's largest image. **Video** (`<video>`/`<source>`/`poster`)
+  is network-blocked the same way. **Video-embed iframes** (YouTube/Vimeo/…) arrive
+  as `sub_frame` (not covered by the media block), so they're gated DOM-side —
+  `src` stripped to a "▶ tap to load" placeholder, swapped back in on tap.
+  Placeholders are inline text boxes sized to attributed dimensions (no layout
+  shift, no external assets). Policy persists in `browser.storage.local` keyed by
+  `location.hostname`, default `placeholder-tap`. If `webRequest` blocking is
+  unavailable it logs and falls back to the DOM-strip behaviour so the app still
+  works.
 - Installs uBlock Origin at **runtime from AMO** (not bundled in the APK). On
   first launch it calls `WebExtensionController.install(...)` with the AMO
   "latest" signed xpi:
@@ -156,11 +174,14 @@ notes/measurements as you go):
 | uBlock installs from AMO (logcat: "uBlock installed") | |
 | `uBO: on/off` toggle changes ad blocking after reload | |
 | `IMG:` button shows current policy (default `tap`) once page loads | |
+| Blocked images/video produce NO network fetch (logcat/devtools: request cancelled, not just hidden) | |
+| logcat "[eink-bg] network media-block active" appears at startup | |
 | Cycle `IMG:` → `hidden`: all images become "🖼 image hidden" boxes | |
-| Cycle `IMG:` → `tap`: boxes say "tap to load"; tapping one loads that image | |
+| Cycle `IMG:` → `tap`: boxes say "tap to load"; tapping one triggers the fetch + loads | |
 | Cycle `IMG:` → `primary`: main/large image loads, ads/thumbs stay placeholders | |
 | Cycle `IMG:` → `all`: every image loads normally | |
-| Image policy persists per-domain across reloads/relaunch | |
+| `<video>` blocked (no media fetch) until tapped; video-embed iframes show "▶ tap to load" | |
+| Media policy persists per-domain across reloads/relaunch | |
 | Refresh / ghosting quality on page flip (subjective) | |
 
 ## Build config (mirrors layuv android_native, known-good)
