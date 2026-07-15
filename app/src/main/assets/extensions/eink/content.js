@@ -60,6 +60,20 @@
             behavior: "auto"
         });
 
+        // Signal the native app that a page flip happened, so it can drive the
+        // Supernote EPD full-clear-every-N-turns refresh (Epd + RattaEink). In
+        // GeckoView, runtime.sendMessage reaches the app's MessageDelegate that
+        // was registered under the special native-app name "browser". Guarded so
+        // it silently no-ops off-GeckoView (or if messaging is unavailable) —
+        // page flipping must never depend on the refresh path.
+        try {
+            if (typeof browser !== "undefined" && browser.runtime && browser.runtime.sendMessage) {
+                browser.runtime.sendMessage({ type: "flip" });
+            }
+        } catch (e) {
+            /* ignore — flipping still works without native refresh */
+        }
+
         // Release the lock after the cooldown so rapid taps can't stack jumps
         // mid-refresh.
         setTimeout(function () {

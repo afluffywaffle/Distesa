@@ -44,14 +44,20 @@ import android.view.View
 class Epd {
     private var turnsSinceFullClear = 0
 
-    /** Page-turn — auto-EPD for most turns; escalates to a full clear every [FULL_EVERY] turns. */
-    fun pageTurn(view: View) {
+    /**
+     * Page-turn — auto-EPD for most turns; escalates to a full clear every
+     * [FULL_EVERY] turns. Returns true iff this turn triggered a full clear
+     * (so callers can log/observe the ghost-flush cadence).
+     */
+    fun pageTurn(view: View): Boolean {
         turnsSinceFullClear++
-        if (turnsSinceFullClear >= FULL_EVERY) {
+        return if (turnsSinceFullClear >= FULL_EVERY) {
             turnsSinceFullClear = 0
             fullClear(view)
+            true
         } else {
             view.invalidate()
+            false
         }
     }
 
@@ -74,6 +80,7 @@ class Epd {
     fun region(view: View, left: Int, top: Int, right: Int, bottom: Int) = view.invalidate()
 
     companion object {
-        private const val FULL_EVERY = 6
+        /** A full clean clear is forced once every this many page turns. */
+        const val FULL_EVERY = 6
     }
 }

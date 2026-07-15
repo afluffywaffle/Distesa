@@ -12,6 +12,7 @@ import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.WebExtensionController
+import com.afluffypancake.achroma.eink.Epd
 
 /**
  * Achroma Phase 0 Spike A — the GeckoView engine evaluation.
@@ -31,8 +32,10 @@ import org.mozilla.geckoview.WebExtensionController
  * [WebExtensionController.PromptDelegate] auto-grants install/permission requests
  * (acceptable for a test spike — NOT what a shipping build should do).
  *
- * The e-ink refresh modules (eink/) are ported from layuv but NOT yet wired to
- * the Gecko rendering surface — that is Phase 1 work (see eink/ TODOs).
+ * A bundled "eink" WebExtension provides tap-to-flip pagination; each flip is
+ * signalled to us via native messaging (see [FlipMessageDelegate]) and drives the
+ * ported [Epd] + RattaEink EPD refresh — a clean full-panel clear every
+ * [Epd.FULL_EVERY] turns to flush accumulated e-ink ghosting.
  */
 class MainActivity : Activity() {
 
@@ -43,6 +46,13 @@ class MainActivity : Activity() {
     /** The installed uBlock Origin add-on, once resolved (install or list). */
     private var ublock: WebExtension? = null
     private var busy = false
+
+    /**
+     * Native EPD refresh driver for the GeckoView surface. On each page flip the
+     * eink extension signals us; [Epd] counts turns and forces a clean full-panel
+     * clear (via RattaEink → Supernote EinkManager) every [Epd.FULL_EVERY] turns.
+     */
+    private val epd = Epd()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -91,11 +101,58 @@ class MainActivity : Activity() {
     private fun installEink(runtime: GeckoRuntime) {
         try {
             runtime.webExtensionController.installBuiltIn(EINK_URI).accept(
-                { ext -> Log.i(TAG, "eink extension installed: ${ext?.id}") },
+                { ext ->
+                    Log.i(TAG, "eink extension installed: ${ext?.id}")
+                    // Register a native-messaging delegate under the special app
+                    // name "browser" so the content script's runtime.sendMessage
+                    // reaches us on every page flip.
+                    ext?.setMessageDelegate(FlipMessageDelegate, "browser")
+                },
                 { e -> Log.w(TAG, "eink extension install failed: ${e?.message}") },
             )
         } catch (e: Throwable) {
             Log.w(TAG, "eink install threw ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    /**
+     * Receives {type:"flip"} messages from the eink content script and drives the
+     * EPD refresh. Posted onto the view so the full clear runs AFTER the flip has
+     * painted. All failures are logged and swallowed — the extension must keep
+     * flipping pages even if the native refresh path errors.
+     */
+    private val FlipMessageDelegate = object : WebExtension.MessageDelegate {
+        override fun onMessage(
+            nativeApp: String,
+            message: Any,
+            sender: WebExtension.MessageSender,
+        ): GeckoResult<Any>? {
+            try {
+                val type = when (message) {
+                    is org.json.JSONObject -> message.optString("type")
+                    else -> message.toString()
+                }
+                if (type == "flip") onFlip()
+            } catch (e: Throwable) {
+                Log.w(TAG, "flip message handling threw ${e.javaClass.simpleName}: ${e.message}")
+            }
+            return null
+        }
+    }
+
+    private fun onFlip() {
+        if (!::view.isInitialized) return
+        view.post {
+            try {
+                val fullClear = epd.pageTurn(view)
+                if (fullClear) {
+                    Log.i(TAG, "flip -> EPD FULL CLEAR (every ${Epd.FULL_EVERY} turns)")
+                } else {
+                    Log.i(TAG, "flip -> partial refresh")
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "EPD refresh threw ${e.javaClass.simpleName}: ${e.message}")
+            }
         }
     }
 

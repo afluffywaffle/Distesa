@@ -57,8 +57,15 @@ Maven Central, so `settings.gradle.kts` adds that repository.
   standalone real add-on — updatable and toggleable, exactly like Firefox for
   Android — not a frozen bundled extension.
 - Ports the layuv e-ink refresh modules into `eink/` (`RattaEink`, `Epd`,
-  `EdgeNavView`), decoupled from the layuv reader. These are **not yet wired** to
-  the Gecko surface — that is Phase 1 (see the TODOs in those files).
+  `EdgeNavView`), decoupled from the layuv reader. `Epd` + `RattaEink` are now
+  **wired to page flips**: the eink content script sends a `{type:"flip"}` native
+  message (GeckoView delegate name `"browser"`, needing the `nativeMessaging` +
+  `geckoViewAddons` manifest permissions) on each flip; `MainActivity`'s
+  `MessageDelegate` posts `Epd.pageTurn(geckoView)` onto the view, which forces a
+  clean full-panel clear via `RattaEink.sendOneFullFrame` every `FULL_EVERY` (6)
+  turns and lets the panel do a default partial update otherwise. `RattaEink`
+  reflects into Supernote's hidden `EinkManager` and no-ops safely off-device.
+  (`EdgeNavView` remains unwired — a later Phase 1 step.)
 
 ## Build
 
