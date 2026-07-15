@@ -3,6 +3,8 @@ package com.afluffypancake.achroma
 import android.app.Activity
 import android.content.Context
 import android.content.SharedPreferences
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -18,8 +20,10 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.Switch
+import androidx.appcompat.widget.SwitchCompat
+import com.afluffypancake.achroma.eink.EdgeNavView
 import java.net.URLEncoder
+import kotlin.math.hypot
 import org.mozilla.geckoview.ContentBlocking
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
@@ -71,6 +75,16 @@ class MainActivity : Activity() {
     private var currentUrl: String? = null
     private val ui = Handler(Looper.getMainLooper())
     private val autoHide = Runnable { hideChrome() }
+    private var chromeAtBottom = false
+
+    // Navigation/paging + chrome levers (persisted).
+    private var navStyle = "inset"       // "inset" (narrow the page) | "overlay"
+    private var navPlacement = "both"    // "both" | "left" | "right"
+    private var showZones = true         // draw the faint chevron affordance
+    private var chromePos = "auto"       // "auto" | "top" | "bottom"
+    private var searchEngine = "DuckDuckGo"
+    private var leftStrip: EdgeNavView? = null
+    private var rightStrip: EdgeNavView? = null
 
     // E-ink performance levers (persisted in SharedPreferences; see loadSettings()).
     private var animOff = true          // inject animation/transition-killing CSS
@@ -128,49 +142,88 @@ class MainActivity : Activity() {
         view = GeckoView(this)
         view.setSession(session)
 
-        // Default state = NOTHING but the page. All chrome is hidden and surfaced
-        // only via a thin transparent tap-strip at the very top. A tap anywhere in
-        // the page area (below the bar) dismisses the chrome, so it stays out of
-        // the way. (dispatchTouchEvent lets the page still receive that tap.)
+        val edge = if (chromeAtBottom) Gravity.BOTTOM else Gravity.TOP
+
+        // Default state = NOTHING but the page. All chrome hides; a tap in the page
+        // area OFF the chrome edge dismisses it (dispatchTouchEvent lets the page
+        // still receive that tap).
         val root = object : FrameLayout(this) {
             override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
                 if (ev.actionMasked == MotionEvent.ACTION_DOWN &&
-                    chromeBar.visibility == View.VISIBLE && ev.y > chromeBar.bottom &&
-                    !pointInPanel(ev)
+                    chromeBar.visibility == View.VISIBLE && !pointInPanel(ev) &&
+                    (if (chromeAtBottom) ev.y < chromeBar.top else ev.y > chromeBar.bottom)
                 ) {
                     hideChrome()
                 }
                 return super.dispatchTouchEvent(ev)
             }
         }
-        root.addView(view)
 
-        // Thin full-width transparent reveal strip across the very top (~6%).
-        // Kept small so it never swallows the page-flip left/right-third taps.
+        // The GeckoView. In INSET mode we physically narrow it with real left/right
+        // margins so the paging strips sit in empty margins (page reflows narrower);
+        // in OVERLAY mode it fills the width and strips overlay the page edges.
+        val stripW = (resources.displayMetrics.widthPixels * 0.08f).toInt() // ~8%
+        val viewLp = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
+        )
+        if (navStyle == "inset") {
+            if (navPlacement != "right") viewLp.leftMargin = stripW
+            if (navPlacement != "left") viewLp.rightMargin = stripW
+        }
+        root.addView(view, viewLp)
+
+        // Paging strips (native EdgeNavView). Bottom-weighted; tap = flip.
+        addStrips(root, stripW)
+
+        // Reveal tap-strip: only the CENTER ~40% width at the chosen edge, so a tap
+        // there never collides with the bottom-weighted SIDE paging lanes. Added
+        // BELOW the chrome bar in z-order so it only catches taps while chrome is
+        // hidden (the bar, on top, owns taps when visible).
         val revealStrip = View(this).apply { setOnClickListener { toggleChrome() } }
         root.addView(
             revealStrip,
-            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dp(56), Gravity.TOP),
+            FrameLayout.LayoutParams(
+                (resources.displayMetrics.widthPixels * 0.40f).toInt(), dp(48),
+                edge or Gravity.CENTER_HORIZONTAL,
+            ),
+        )
+        // Visible reveal HANDLE — a thin light notch centered on the edge so the
+        // reveal target is discoverable. Non-clickable: taps fall to the strip.
+        val handle = View(this).apply {
+            background = GradientDrawable().apply {
+                cornerRadius = dp(3).toFloat()
+                setColor(Color.rgb(190, 190, 190))
+            }
+            isClickable = false
+        }
+        root.addView(
+            handle,
+            FrameLayout.LayoutParams(dp(44), dp(5), edge or Gravity.CENTER_HORIZONTAL).apply {
+                topMargin = if (chromeAtBottom) 0 else dp(6)
+                bottomMargin = if (chromeAtBottom) dp(6) else 0
+            },
         )
 
-        // The slim chrome bar (hidden by default), drawn ABOVE the reveal strip so
-        // its own controls receive taps when it's showing.
+        // Chrome bar (hidden by default) at the adaptive edge, ABOVE the reveal
+        // strip so its controls (URL field etc.) receive taps when it's showing.
         chromeBar = buildChromeBar()
         root.addView(
             chromeBar,
-            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP),
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, edge,
+            ),
         )
 
-        // The settings panel (hidden until ⚙ on the chrome bar is tapped). Now also
-        // hosts the uBlock toggle + image-policy cycle rows (no floating buttons).
+        // Settings panel (hidden until ⚙). Sits just inside the chrome edge.
         settingsPanel = buildSettingsPanel()
         root.addView(
             settingsPanel,
             FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP or Gravity.END,
-            ).apply { topMargin = dp(56) },
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                edge or Gravity.END,
+            ).apply {
+                if (chromeAtBottom) bottomMargin = dp(52) else topMargin = dp(52)
+            },
         )
         setContentView(root)
 
@@ -180,6 +233,36 @@ class MainActivity : Activity() {
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    /** Builds the 1–2 native paging strips per the placement + style settings. */
+    private fun addStrips(root: FrameLayout, stripW: Int) {
+        leftStrip = null
+        rightStrip = null
+        if (navPlacement != "right") {
+            leftStrip = EdgeNavView(this, showZones, onNext = { flipPage("next") }, onPrev = { flipPage("prev") })
+            root.addView(
+                leftStrip,
+                FrameLayout.LayoutParams(stripW, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.START),
+            )
+        }
+        if (navPlacement != "left") {
+            rightStrip = EdgeNavView(this, showZones, onNext = { flipPage("next") }, onPrev = { flipPage("prev") })
+            root.addView(
+                rightStrip,
+                FrameLayout.LayoutParams(stripW, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.END),
+            )
+        }
+    }
+
+    /** Native strip tap → tell content.js to scroll a page (it also signals EPD). */
+    private fun flipPage(dir: String) {
+        val p = einkPort ?: return
+        try {
+            p.postMessage(org.json.JSONObject().put("type", "navFlip").put("dir", dir))
+        } catch (e: Throwable) {
+            Log.w(TAG, "flipPage post threw ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
 
     /** True if the touch lands inside the (open) settings panel — don't dismiss then. */
     private fun pointInPanel(ev: MotionEvent): Boolean {
@@ -194,20 +277,24 @@ class MainActivity : Activity() {
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(0xF2111111.toInt()) // near-opaque dark grey, no colour
+            setBackgroundColor(0xF5FAFAFA.toInt()) // near-white, high-contrast, no colour
             setPadding(dp(6), dp(4), dp(6), dp(4))
             visibility = View.GONE
+            // Any touch within the chrome resets the (generous) idle timer, unless
+            // the address field is focused (then it's pinned open).
+            setOnTouchListener { _, _ -> if (!urlField.hasFocus()) scheduleAutoHide(); false }
         }
         backBtn = Button(this).apply {
             text = "‹"
+            setTextColor(CHROME_INK)
             isEnabled = false
             setOnClickListener {
                 if (::session.isInitialized && canGoBack) { session.goBack(); afterNav() }
             }
         }
         urlField = EditText(this).apply {
-            setTextColor(0xFFEEEEEE.toInt())
-            setHintTextColor(0xFF888888.toInt())
+            setTextColor(CHROME_INK)
+            setHintTextColor(0xFF777777.toInt())
             hint = "Search or enter address"
             setSingleLine()
             setSelectAllOnFocus(true)
@@ -216,17 +303,23 @@ class MainActivity : Activity() {
             setOnEditorActionListener { _, actionId, _ ->
                 if (actionId == EditorInfo.IME_ACTION_GO) { submitUrl(text.toString()); true } else false
             }
+            // Focus pins the chrome open indefinitely so the user can type; losing
+            // focus restarts the generous idle timer.
+            setOnFocusChangeListener { _, hasFocus ->
+                if (hasFocus) ui.removeCallbacks(autoHide) else scheduleAutoHide()
+            }
         }
         val reloadBtn = Button(this).apply {
             text = "⟳"
+            setTextColor(CHROME_INK)
             setOnClickListener { if (::session.isInitialized) { session.reload(); afterNav() } }
         }
         val gearBtn = Button(this).apply {
             text = "⚙"
+            setTextColor(CHROME_INK)
             setOnClickListener {
                 settingsPanel.visibility =
                     if (settingsPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
-                scheduleAutoHide()
             }
         }
         bar.addView(backBtn)
@@ -242,7 +335,6 @@ class MainActivity : Activity() {
 
     private fun showChrome() {
         chromeBar.visibility = View.VISIBLE
-        // Reflect the current URL for editing (select-all on focus).
         currentUrl?.let { urlField.setText(it) }
         scheduleAutoHide()
     }
@@ -251,16 +343,19 @@ class MainActivity : Activity() {
         ui.removeCallbacks(autoHide)
         chromeBar.visibility = View.GONE
         settingsPanel.visibility = View.GONE
-        // Drop focus + keyboard so nothing lingers over the page.
         urlField.clearFocus()
         (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
             ?.hideSoftInputFromWindow(urlField.windowToken, 0)
     }
 
-    /** Restart the ~4s idle auto-hide timer (only while chrome is showing). */
+    /**
+     * Generous idle auto-hide (~7s). Never runs while the address field is focused
+     * (typing pins the chrome open). Reset on any chrome touch.
+     */
     private fun scheduleAutoHide() {
         ui.removeCallbacks(autoHide)
-        ui.postDelayed(autoHide, 4000)
+        if (::urlField.isInitialized && urlField.hasFocus()) return // pinned while typing
+        ui.postDelayed(autoHide, 7000)
     }
 
     /** Called after Go/back/reload — hide the chrome once navigation is under way. */
@@ -279,7 +374,8 @@ class MainActivity : Activity() {
         val uri = if (looksUrl) {
             if (t.startsWith("http://") || t.startsWith("https://")) t else "https://$t"
         } else {
-            "https://duckduckgo.com/?q=" + URLEncoder.encode(t, "UTF-8")
+            val template = SEARCH_ENGINES[searchEngine] ?: SEARCH_ENGINES["DuckDuckGo"]!!
+            template.replace("%s", URLEncoder.encode(t, "UTF-8"))
         }
         if (::session.isInitialized) session.loadUri(uri)
         afterNav()
@@ -295,6 +391,26 @@ class MainActivity : Activity() {
         jsEnabled = prefs.getBoolean("jsEnabled", true)
         fullEvery = prefs.getInt("fullEvery", 6)
         loginHosts = HashSet(prefs.getStringSet("loginHosts", emptySet()) ?: emptySet())
+        navStyle = prefs.getString("navStyle", "inset") ?: "inset"
+        navPlacement = prefs.getString("navPlacement", "both") ?: "both"
+        showZones = prefs.getBoolean("showZones", true)
+        chromePos = prefs.getString("chromePos", "auto") ?: "auto"
+        searchEngine = prefs.getString("searchEngine", "DuckDuckGo") ?: "DuckDuckGo"
+        chromeAtBottom = computeChromeAtBottom()
+    }
+
+    /** Adaptive chrome edge: small screens (Nomad ~7.8") = bottom, large (Manta) = top. */
+    private fun computeChromeAtBottom(): Boolean = when (chromePos) {
+        "top" -> false
+        "bottom" -> true
+        else -> {
+            val dm = resources.displayMetrics
+            val diagIn = hypot(
+                (dm.widthPixels / dm.xdpi).toDouble(),
+                (dm.heightPixels / dm.ydpi).toDouble(),
+            )
+            diagIn < 9.0 // below ~9" diagonal → bottom (thumb-reachable)
+        }
     }
 
     /** True if [host] should get Standard (not Strict) tracking protection. */
@@ -353,10 +469,34 @@ class MainActivity : Activity() {
     private fun buildSettingsPanel(): LinearLayout {
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xEE222222.toInt()) // semi-opaque dark grey
-            setPadding(28, 20, 28, 20)
+            setBackgroundColor(0xF7FAFAFA.toInt()) // light, near-white
+            setPadding(dp(16), dp(12), dp(16), dp(12))
             visibility = View.GONE
         }
+        // Toolbar position — the plain, obvious control the user asked for.
+        panel.addView(makeCycleRow({ "Toolbar position: ${chromePos.replaceFirstChar { it.uppercase() }}" }) {
+            chromePos = when (chromePos) { "auto" -> "top"; "top" -> "bottom"; else -> "auto" }
+            prefs.edit().putString("chromePos", chromePos).apply()
+            recreate() // structural: rebuild at the new edge
+        })
+        panel.addView(makeCycleRow({ "Search: $searchEngine" }) {
+            val names = SEARCH_ENGINES.keys.toList()
+            searchEngine = names[(names.indexOf(searchEngine).coerceAtLeast(0) + 1) % names.size]
+            prefs.edit().putString("searchEngine", searchEngine).apply()
+        })
+        panel.addView(makeCycleRow({ "Nav zones: $navStyle" }) {
+            navStyle = if (navStyle == "inset") "overlay" else "inset"
+            prefs.edit().putString("navStyle", navStyle).apply(); recreate()
+        })
+        panel.addView(makeCycleRow({ "Nav side: $navPlacement" }) {
+            navPlacement = when (navPlacement) { "both" -> "left"; "left" -> "right"; else -> "both" }
+            prefs.edit().putString("navPlacement", navPlacement).apply(); recreate()
+        })
+        panel.addView(makeSwitch("Show tap zones", showZones) { on ->
+            showZones = on; prefs.edit().putBoolean("showZones", on).apply()
+            leftStrip?.let { it.showZones = on; it.invalidate() }
+            rightStrip?.let { it.showZones = on; it.invalidate() }
+        })
         panel.addView(makeSwitch("Animations off", animOff) { on ->
             animOff = on; prefs.edit().putBoolean("animOff", on).apply(); pushSettingsToExtension()
         })
@@ -371,35 +511,34 @@ class MainActivity : Activity() {
             jsEnabled = on; prefs.edit().putBoolean("jsEnabled", on).apply()
             if (::session.isInitialized) session.settings.setAllowJavascript(on); reloadPage()
         })
-        cadenceBtn = Button(this).apply {
-            text = cadenceLabel()
-            setOnClickListener { cycleCadence() }
-        }
+        cadenceBtn = makeButton(cadenceLabel()) { cycleCadence() }
         panel.addView(cadenceBtn)
         // Folded-in controls (formerly floating buttons): uBlock on/off + image
         // policy cycle. Behaviour unchanged — only their home moved into the panel.
-        toggle = Button(this).apply {
-            text = "uBlock: …"
-            isEnabled = false
-            setOnClickListener { onToggleClicked() }
-        }
+        toggle = makeButton("uBlock: …") { onToggleClicked() }.apply { isEnabled = false }
         panel.addView(toggle)
-        imgToggle = Button(this).apply {
-            text = "Images: …"
-            isEnabled = false
-            setOnClickListener { onCycleImagePolicy() }
-        }
+        imgToggle = makeButton("Images: …") { onCycleImagePolicy() }.apply { isEnabled = false }
         panel.addView(imgToggle)
         return panel
     }
 
-    private fun makeSwitch(label: String, initial: Boolean, onChange: (Boolean) -> Unit): Switch {
-        return Switch(this).apply {
+    private fun makeSwitch(label: String, initial: Boolean, onChange: (Boolean) -> Unit): SwitchCompat {
+        return SwitchCompat(this).apply {
             text = label
-            setTextColor(0xFFEEEEEE.toInt())
+            setTextColor(CHROME_INK)
             isChecked = initial
             setOnCheckedChangeListener { _, isChecked -> onChange(isChecked) }
         }
+    }
+
+    private fun makeButton(label: String, onClick: () -> Unit): Button =
+        Button(this).apply { text = label; setTextColor(CHROME_INK); setOnClickListener { onClick() } }
+
+    /** A button whose label is re-read from [label] after each tap (cycle control). */
+    private fun makeCycleRow(label: () -> String, onClick: () -> Unit): Button {
+        val b = makeButton(label(), {})
+        b.setOnClickListener { onClick(); b.text = label() }
+        return b
     }
 
     private fun cadenceLabel(): String =
@@ -736,6 +875,17 @@ class MainActivity : Activity() {
 
         /** EPD full-clear cadence steps cycled by the settings button (0 = Off). */
         private val CADENCE_STEPS = intArrayOf(0, 4, 6, 8, 10, 15)
+
+        /** Dark ink for all (light) chrome — high contrast, no colour. */
+        private const val CHROME_INK = 0xFF222222.toInt()
+
+        /** Built-in search engines (query templates, %s = encoded query). */
+        private val SEARCH_ENGINES = linkedMapOf(
+            "DuckDuckGo" to "https://duckduckgo.com/?q=%s",
+            "Startpage" to "https://www.startpage.com/sp/search?query=%s",
+            "Brave" to "https://search.brave.com/search?q=%s",
+            "Google" to "https://www.google.com/search?q=%s",
+        )
 
         /** Common auth/SSO hosts always treated as Standard TP (suffix match). */
         private val AUTH_ALLOWLIST = listOf(

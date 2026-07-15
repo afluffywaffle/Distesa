@@ -39,10 +39,11 @@ Maven Central, so `settings.gradle.kts` adds that repository.
 - Bundles our own **"eink" WebExtension** (`app/src/main/assets/extensions/eink/`)
   loaded at startup via `webExtensionController.installBuiltIn(...)`. It ports
   eita's "Page Scroll" quantized pagination and adapts it for e-ink: `content.js`
-  gives **tap-to-flip** page turning (tap the left third = previous page, right
-  third = next page, middle third ignored) using instant viewport jumps
-  (`scrollTo` with `behavior:"auto"` — no smooth scroll, which ghosts on EPD).
-  Because we author it, it ships inside the APK — unlike third-party add-ons.
+  does **tap-to-flip** page turning via instant viewport jumps (`scrollTo` with
+  `behavior:"auto"` — no smooth scroll, which ghosts on EPD). Taps come from the
+  native edge paging strips (see "Paging zones" below), which message
+  `{type:"navFlip", dir}` over the port. Because we author it, it ships inside the
+  APK — unlike third-party add-ons.
 - Gates **images and video/media** per-domain, **blocked at the NETWORK layer** so
   bytes are never fetched until allowed (no "load then hide" race — the whole point
   on e-ink). `background.js` registers `webRequest.onBeforeRequest([blocking])` for
@@ -86,26 +87,45 @@ Maven Central, so `settings.gradle.kts` adds that repository.
   `webExtensionController.list()` (matching add-on id `uBlock0@raymondhill.net`)
   instead of re-installing. Network/install failures log and leave the app
   usable — they do not crash.
-- **Minimal, mostly-hidden navigation chrome.** Default state is just the page —
-  nothing floats. A thin full-width transparent **reveal strip** across the very
-  top (~56dp, small enough not to swallow the page-flip taps) toggles a slim
-  greyscale **chrome bar** (instant, no animation): `‹` back · editable URL/search
-  field · `⟳` reload · `⚙` settings. The bar **auto-hides** after a navigation
-  (Go/back/reload), after ~4s idle (`Handler` timer), and when you tap in the page
-  area below it (the root's `dispatchTouchEvent` dismisses without stealing the tap
-  from the page). The URL field (IME **Go**) is **URL-or-search**: text starting
-  with `http`, or containing a dot and no spaces, loads as a URL (`https://`
-  prepended when schemeless) via `session.loadUri`; anything else becomes a
-  `https://duckduckgo.com/?q=…` search. Back = `GeckoSession.goBack()` with
-  `canGoBack` tracked via `NavigationDelegate.onCanGoBack` (button hidden when
-  false); reload = `session.reload()`; the field syncs to the page URL via
-  `onLocationChange`.
-  - `⚙` opens the **settings panel**, which now also hosts the folded-in
-    **uBlock on/off** toggle (`enable/disable(ext, EnableSource.USER)` + reload)
-    and the **image-policy cycle** row (hide-all → tap → primary → all, pushing
-    `{type:"cyclePolicy"}` down the eink port; `images.js` persists per-domain and
-    reloads, reporting the current policy back to label the row). No buttons float
-    on the page anymore — all controls live behind the top-edge reveal → ⚙ panel.
+- **Paging zones (native `EdgeNavView` strips).** Mirrors layuv's reader
+  edge-nav split model (per-strip prev/next, `both`/`left`/`right` placement,
+  `NAV_STRIP_DP` width, edge-tap with swipe rejection) but ADAPTED for a browser:
+  - **Inset (default) vs Overlay:** inset physically narrows the GeckoView with
+    real left/right margins (~8%) so the strips sit in empty margins and responsive
+    sites reflow narrower; overlay keeps the page full-width with transparent strips
+    over content. Placement: **both / left / right**.
+  - **Bottom-weighted:** the active zone is the lower ~60% of each strip
+    (`ACTIVE_TOP=0.40`), NEXT at the very bottom and PREV just above (`SPLIT=0.70`);
+    the upper 40% is inactive (taps fall through to the page).
+  - Strips **always flip and consume the tap** (native interception = a link under
+    an overlay strip never opens). Affordance = faint **light** chevrons (up=prev,
+    down=next); **Show tap zones** hides them while keeping zones live.
+  - A tap sends `{type:"navFlip", dir}` over the eink port → `content.js` does the
+    instant quantized scroll and signals the EPD refresh (flip→Epd path unchanged).
+- **Minimal, mostly-hidden navigation chrome (adaptive top/bottom).** Default is
+  just the page — nothing floats. A visible thin **light reveal handle** (notch)
+  centered on the chrome edge marks a **reveal tap-strip** (center ~40% width, so
+  it never collides with the bottom-weighted SIDE paging lanes) that toggles a slim
+  **light** chrome bar (instant, no animation): `‹` back · URL/search field · `⟳`
+  reload · `⚙` settings. **Edge is adaptive:** small screens (Nomad ~7.8") → bottom,
+  large (Manta ~10.7") → top, auto-detected from the DisplayMetrics diagonal
+  (`hypot(w/xdpi, h/ydpi)`, threshold 9"); a **Toolbar position: Auto/Top/Bottom**
+  setting overrides it. Bar, handle, and reveal-strip all move to the chosen edge
+  together, and the page-tap-dismiss keys off that edge.
+  - **Auto-hide is gentle:** hides after a navigation or ~7s idle, but focusing the
+    URL field **pins it open indefinitely** (idle timer cancelled while typing) and
+    any chrome touch resets the timer — so it won't vanish mid-type.
+  - **URL-or-search** (IME **Go**): `http`-prefixed or dot-without-spaces → load as
+    URL (`https://` prepended if schemeless) via `session.loadUri`; else a search
+    via the chosen engine template. **Search engine** setting: DuckDuckGo (default),
+    Startpage, Brave, Google — each a `…%s` query template, persisted.
+  - Back = `GeckoSession.goBack()` gated on `NavigationDelegate.onCanGoBack`;
+    reload = `session.reload()`; field syncs via `onLocationChange`.
+  - `⚙` opens the **settings panel** (light), which hosts the folded-in **uBlock
+    on/off** and **image-policy cycle** rows plus Toolbar-position, Search, Nav
+    zones (inset/overlay), Nav side (both/left/right), Show-tap-zones, and the perf
+    levers. Structural changes (position, nav style/side) `recreate()` the activity;
+    the rest apply live. No buttons float on the page anymore.
 
   **App↔extension messaging (GeckoView 152) — via a background relay:** GeckoView
   exposes native messaging (`connectNative`/`sendNativeMessage`, which reach the
@@ -210,10 +230,14 @@ notes/measurements as you go):
 | Page load — wiki E Ink (s) | |
 | Flip fires native refresh (logcat: "flip -> partial refresh" / "EPD FULL CLEAR") | |
 | eink extension loads (logcat: "eink extension installed") | |
-| Tap right third → next page (instant jump, clean refresh) | |
-| Tap left third → previous page | |
-| Tap middle third → no page flip (links still work) | |
-| Default view has NO chrome; tapping the top strip reveals the bar | |
+| Bottom edge strip: tap very bottom → next page; above it → prev | |
+| Edge strip tap over a link flips instead of opening the link | |
+| Inset mode narrows the page (margins); overlay keeps full width | |
+| Show-tap-zones off hides chevrons but zones still flip | |
+| Default view has NO chrome; the light handle marks the reveal strip | |
+| Chrome at bottom on Nomad / top on Manta (or per Toolbar-position setting) | |
+| Focus URL field → chrome stays open (no auto-hide while typing) | |
+| Search box: plain words → chosen engine; host → loads as URL | |
 | Chrome bar auto-hides after nav / ~4s idle / tapping the page | |
 | URL field: typed host loads as URL; plain words → DuckDuckGo search | |
 | Back button appears only when there's history; `‹` goes back | |

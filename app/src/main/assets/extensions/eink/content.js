@@ -10,11 +10,11 @@
  *   - window.scrollTo uses behavior:"auto" (INSTANT). eita used "smooth", which
  *     ghosts badly on an EPD panel — every intermediate frame smears. A single
  *     jump is one clean partial refresh.
- *   - Navigation is by TAP ZONE: left third = previous page, right third = next
- *     page, middle third = ignored (reserved for links / future UI). No wheel,
- *     no keyboard, no floating nav pill, no drag handle, no settings popup, no
- *     indicator UI, no browser.storage / messaging — this is a bundled built-in
- *     we author, so it just needs to reliably flip pages.
+ *   - Navigation is driven by NATIVE edge strips (EdgeNavView), not a JS tap
+ *     handler: the app's paging zones live in real inset margins (or transparent
+ *     overlays) and message us {type:"navFlip", dir:"next"|"prev"} over the eink
+ *     port. We just scroll and signal the EPD refresh. (Native interception also
+ *     means an edge tap over a link never opens the link.)
  *
  * Framework-free vanilla JS.
  */
@@ -102,31 +102,22 @@
         scrollToPage(currentPage - 1);
     }
 
-    // --- Tap zones: left third = prev, right third = next, middle = ignore ---
+    // --- Native paging bridge -----------------------------------------------
+    // The native EdgeNav strips send {type:"navFlip", dir} over the eink port
+    // (relayed by background.js). We just scroll. Content scripts can't reach the
+    // app directly, so runtime.connect() targets background.js.
 
-    function handleTap(clientX, target) {
-        if (isAnimating) return;
-
-        // Let genuine interactive targets (links, buttons, inputs) win — only
-        // bare-page taps flip. Middle third is always reserved.
-        if (target && typeof target.closest === "function") {
-            if (target.closest("a, button, input, textarea, select, [contenteditable], [role='button']")) {
-                return;
-            }
+    function connectNav() {
+        try {
+            var port = browser.runtime.connect({ name: "eink-nav" });
+            port.onMessage.addListener(function (msg) {
+                if (!msg || msg.type !== "navFlip") return;
+                if (msg.dir === "prev") prevPage(); else nextPage();
+            });
+        } catch (e) {
+            /* no bridge — paging just won't fire; page is otherwise unaffected */
         }
-
-        var third = window.innerWidth / 3;
-        if (clientX < third) {
-            prevPage();
-        } else if (clientX > third * 2) {
-            nextPage();
-        }
-        // middle third: ignored
     }
 
-    // Use click (fires after a clean tap; a drag/selection won't synthesize one),
-    // capture phase so we see it before page handlers that might stopPropagation.
-    document.addEventListener("click", function (e) {
-        handleTap(e.clientX, e.target);
-    }, true);
+    connectNav();
 })();

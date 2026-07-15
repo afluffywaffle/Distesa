@@ -148,13 +148,18 @@
         var d = attrArea(el);
         var ph = document.createElement("span");
         ph.className = "eink-media-ph";
+        // Obviously an intentional tappable placeholder — NOT a broken image:
+        // dashed border, centered glyph + label, high-contrast greyscale on a
+        // LIGHT fill, sized to the element so there's no layout shift.
         ph.style.cssText =
             "display:inline-flex;align-items:center;justify-content:center;" +
-            "box-sizing:border-box;border:1px solid #999;background:#f2f2f2;" +
-            "color:#555;font:12px/1.3 sans-serif;text-align:center;" +
-            "vertical-align:middle;overflow:hidden;cursor:pointer;" +
-            (d.w ? "width:" + d.w + "px;" : "min-width:80px;") +
-            (d.h ? "height:" + d.h + "px;" : "min-height:40px;");
+            "box-sizing:border-box;border:2px dashed #8a8a8a;border-radius:6px;" +
+            "background:#fafafa;color:#333;" +
+            "font:600 13px/1.35 -apple-system,system-ui,sans-serif;" +
+            "text-align:center;vertical-align:middle;overflow:hidden;cursor:pointer;" +
+            "padding:4px;" +
+            (d.w ? "width:" + d.w + "px;" : "min-width:96px;") +
+            (d.h ? "height:" + d.h + "px;" : "min-height:48px;");
         ph.textContent = label;
         return ph;
     }
@@ -210,7 +215,7 @@
         if (img.dataset.einkDone) return;
         img.dataset.einkDone = "1";
         stashImg(img);
-        var ph = makePlaceholder(img, tapLoads ? "🖼 tap to load" : "🖼 image hidden");
+        var ph = makePlaceholder(img, tapLoads ? "🖼 Tap to load" : "🖼 Image hidden");
         ph.addEventListener("click", function (e) {
             e.preventDefault(); e.stopPropagation();
             if (tapLoads) loadImg(img); else ph.remove();
@@ -266,7 +271,7 @@
         if (v.dataset.einkDone) return;
         v.dataset.einkDone = "1";
         stashVideo(v);
-        var ph = makePlaceholder(v, tapLoads ? "▶ tap to load" : "▶ video hidden");
+        var ph = makePlaceholder(v, tapLoads ? "▶ Tap to load video" : "▶ Video hidden");
         ph.addEventListener("click", function (e) {
             e.preventDefault(); e.stopPropagation();
             if (tapLoads) loadVideo(v); else ph.remove();
@@ -283,7 +288,7 @@
         frame.dataset.einkDone = "1";
         frame.dataset.einkSrc = src;
         frame.removeAttribute("src"); // stops the embed fetching / autoplaying
-        var ph = makePlaceholder(frame, tapLoads ? "▶ tap to load" : "▶ video hidden");
+        var ph = makePlaceholder(frame, tapLoads ? "▶ Tap to load video" : "▶ Video hidden");
         ph.addEventListener("click", function (e) {
             e.preventDefault(); e.stopPropagation();
             if (tapLoads) {
