@@ -184,6 +184,24 @@ notes/measurements as you go):
 | Media policy persists per-domain across reloads/relaunch | |
 | Refresh / ghosting quality on page flip (subjective) | |
 
+### Debugging the media network-block (`adb logcat -s AchromaMain`)
+
+The bundled extension's `console.log` does not reliably reach logcat, so
+diagnostics are relayed to the native side and logged as `[eink-diag] …`:
+- `granted perms=…` — the permissions GeckoView actually granted the bundled
+  extension (proves whether `webRequest`/`webRequestBlocking` were honored).
+- `caps: webRequest=… declarativeNetRequest=…` — which APIs exist at runtime.
+- `onBeforeRequest registered with [blocking] …` or `addListener THREW …` /
+  `webRequest UNAVAILABLE …` — whether the blocking listener installed.
+- `media requests seen=N cancelled=M` — whether the listener fires and how many
+  requests it cancels (if `seen>0` but `cancelled=0` under a blocking policy, the
+  listener fires but `{cancel:true}` is being ignored).
+
+The runtime is created with `consoleOutput(true)` (routes JS console to logcat)
+and `extensionsProcessEnabled(false)` (runs the extension in the main process, so
+blocking webRequest is honored synchronously rather than downgraded to
+observe-only).
+
 ## Build config (mirrors layuv android_native, known-good)
 
 - Gradle wrapper 9.1.0, AGP 8.13.2, Kotlin 2.1.0

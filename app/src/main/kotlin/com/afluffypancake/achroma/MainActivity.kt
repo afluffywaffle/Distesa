@@ -8,6 +8,7 @@ import android.widget.Button
 import android.widget.FrameLayout
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoRuntime
+import org.mozilla.geckoview.GeckoRuntimeSettings
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.WebExtension
@@ -124,6 +125,12 @@ class MainActivity : Activity() {
             runtime.webExtensionController.installBuiltIn(EINK_URI).accept(
                 { ext ->
                     Log.i(TAG, "eink extension installed: ${ext?.id}")
+                    // DIAGNOSTIC: log which permissions GeckoView actually GRANTED
+                    // our bundled extension — this is the direct capability probe
+                    // for whether "webRequest"/"webRequestBlocking" are honored.
+                    val md = ext?.metaData
+                    Log.i(TAG, "[eink-diag] granted perms=${md?.requiredPermissions?.joinToString(",")}")
+                    Log.i(TAG, "[eink-diag] granted origins=${md?.requiredOrigins?.joinToString(",")}")
                     // Register a native-messaging delegate under the special app
                     // name "browser" so the content script's runtime.sendMessage
                     // reaches us on every page flip.
@@ -150,11 +157,15 @@ class MainActivity : Activity() {
             sender: WebExtension.MessageSender,
         ): GeckoResult<Any>? {
             try {
-                val type = when (message) {
-                    is org.json.JSONObject -> message.optString("type")
-                    else -> message.toString()
+                val obj = message as? org.json.JSONObject
+                val type = obj?.optString("type") ?: message.toString()
+                when (type) {
+                    "flip" -> onFlip()
+                    // DIAGNOSTIC: background.js reports webRequest capability +
+                    // request/cancel counters here (its own console.log doesn't
+                    // reliably reach logcat), surfaced under tag AchromaMain.
+                    "diag" -> Log.i(TAG, "[eink-diag] ${obj?.optString("msg")}")
                 }
-                if (type == "flip") onFlip()
             } catch (e: Throwable) {
                 Log.w(TAG, "flip message handling threw ${e.javaClass.simpleName}: ${e.message}")
             }
@@ -368,8 +379,22 @@ class MainActivity : Activity() {
         /** Process-wide GeckoRuntime singleton. */
         private fun sharedRuntime(activity: Activity): GeckoRuntime {
             return runtime ?: synchronized(this) {
-                runtime ?: GeckoRuntime.create(activity.applicationContext).also { runtime = it }
+                runtime ?: createRuntime(activity).also { runtime = it }
             }
+        }
+
+        private fun createRuntime(activity: Activity): GeckoRuntime {
+            val settings = GeckoRuntimeSettings.Builder()
+                // Route JS console (including our extension's console.log) to
+                // logcat so [eink-bg]/[eink-images] diagnostics are visible.
+                .consoleOutput(true)
+                // Run WebExtensions IN the main process. Blocking webRequest
+                // (return {cancel:true}) must be honored synchronously; an
+                // out-of-process extension can silently downgrade blocking to
+                // observe-only, which defeats the media network-block.
+                .extensionsProcessEnabled(false)
+                .build()
+            return GeckoRuntime.create(activity.applicationContext, settings)
         }
     }
 }

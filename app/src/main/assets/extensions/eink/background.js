@@ -40,6 +40,44 @@ function log(msg) {
     try { console.log("[eink-bg] " + msg); } catch (e) {}
 }
 
+// DIAGNOSTIC: background console.log does NOT reliably reach adb logcat, so send
+// diagnostics to the app via native messaging — MainActivity logs them under tag
+// AchromaMain as "[eink-diag] ...". Used to prove whether onBeforeRequest fires
+// and whether {cancel:true} is honored.
+//
+// The app's MessageDelegate is registered slightly AFTER the background starts,
+// so early diags are queued and flushed once messaging is ready.
+var diagReady = false;
+var diagQueue = [];
+function sendDiag(msg) {
+    try {
+        var p = browser.runtime.sendNativeMessage(NATIVE_APP, { type: "diag", msg: msg });
+        if (p && p.catch) p.catch(function () {});
+    } catch (e) {}
+}
+function diag(msg) {
+    if (diagReady) { sendDiag(msg); return; }
+    diagQueue.push(msg);
+}
+setTimeout(function () {
+    diagReady = true;
+    for (var i = 0; i < diagQueue.length; i++) sendDiag(diagQueue[i]);
+    diagQueue = [];
+}, 1500);
+
+// Request/cancel counters, flushed to the app periodically.
+var seenCount = 0;
+var cancelCount = 0;
+var lastFlush = 0;
+function maybeFlushCounters() {
+    var now = Date.now();
+    if (seenCount % 25 === 0 || now - lastFlush > 4000) {
+        lastFlush = now;
+        diag("media requests seen=" + seenCount + " cancelled=" + cancelCount +
+            " (netBlock=" + netBlockActive + ")");
+    }
+}
+
 function hostOf(url) {
     try { return new URL(url).hostname || "_local"; } catch (e) { return "_local"; }
 }
@@ -62,18 +100,21 @@ function stateFor(tabId, pageUrl) {
 
 function onBeforeMedia(details) {
     try {
+        seenCount++;
         // The page that owns the request (documentUrl for a subresource); fall
         // back to originUrl, then the request URL itself.
         var pageUrl = details.documentUrl || details.originUrl || details.url;
         var host = hostOf(pageUrl);
         var policy = policyFor(host);
 
-        if (policy === "load-all") return {}; // allow everything
+        if (policy === "load-all") { maybeFlushCounters(); return {}; }
 
         var st = stateFor(details.tabId, pageUrl);
-        if (st.allow.has(details.url)) return {}; // explicitly permitted this load
+        if (st.allow.has(details.url)) { maybeFlushCounters(); return {}; }
 
         // hide-all / placeholder-tap / primary-content-only: block by default.
+        cancelCount++;
+        maybeFlushCounters();
         return { cancel: true };
     } catch (e) {
         log("onBeforeMedia failed (allowing): " + e);
@@ -82,8 +123,14 @@ function onBeforeMedia(details) {
 }
 
 function installNetworkBlock() {
+    // Capability probe reported to the app (background console.log is invisible in
+    // logcat). Tells us definitively what APIs the bundled extension actually got.
+    diag("caps: webRequest=" + (typeof browser.webRequest) +
+        " onBeforeRequest=" + (browser.webRequest ? typeof browser.webRequest.onBeforeRequest : "n/a") +
+        " declarativeNetRequest=" + (typeof browser.declarativeNetRequest));
     try {
         if (!browser.webRequest || !browser.webRequest.onBeforeRequest) {
+            diag("webRequest UNAVAILABLE — DOM-strip fallback only");
             log("webRequest unavailable — falling back to DOM-strip only");
             return;
         }
@@ -93,10 +140,12 @@ function installNetworkBlock() {
             ["blocking"]
         );
         netBlockActive = true;
+        diag("onBeforeRequest registered with [blocking] for " + BLOCK_TYPES.join(","));
         log("network media-block active for types: " + BLOCK_TYPES.join(","));
     } catch (e) {
-        log("installNetworkBlock failed — DOM-strip fallback: " + e);
         netBlockActive = false;
+        diag("addListener THREW: " + e + " — is [blocking] rejected? DOM-strip fallback");
+        log("installNetworkBlock failed — DOM-strip fallback: " + e);
     }
 }
 
