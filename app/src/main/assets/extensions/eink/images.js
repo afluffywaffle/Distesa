@@ -144,24 +144,78 @@
 
     // --- Placeholder --------------------------------------------------------
 
-    function makePlaceholder(el, label) {
+    // Page-level display mode. COLLAPSED (default) renders each hidden item as a
+    // tiny inline chip so the page reads like clean text — the fix for image-heavy
+    // sites (news) where a full-size box per image is just clutter. BOXED keeps a
+    // sized dashed slot (better for comics/reference where position/size matter and
+    // you'll load most of them). Toggled per-page from the native chrome; persisted.
+    var collapsed = true;
+
+    // (Re)apply the current display mode to a placeholder. Dims + glyph + label are
+    // stashed on the element so the same node can flip between chip and box live.
+    function stylePlaceholder(ph) {
+        var glyph = ph.dataset.einkGlyph || "🖼";
+        var full = ph.dataset.einkFull || "";
+        var w = parseInt(ph.dataset.einkW, 10) || 0;
+        var h = parseInt(ph.dataset.einkH, 10) || 0;
+        if (collapsed) {
+            // Tiny inline chip — reclaims the space; tap still loads/dismisses.
+            ph.style.cssText =
+                "display:inline-flex;align-items:center;justify-content:center;" +
+                "box-sizing:border-box;border:1px dashed #9a9a9a;border-radius:4px;" +
+                "background:#f2f2f2;color:#333;cursor:pointer;" +
+                "font:600 12px/1 -apple-system,system-ui,sans-serif;" +
+                "vertical-align:middle;padding:1px 5px;margin:0 2px;" +
+                "width:auto;height:auto;min-width:0;min-height:0;";
+            ph.textContent = glyph;
+            ph.title = full;
+        } else {
+            // Full sized box — obviously a tappable placeholder, not a broken image;
+            // sized to the element so there's no layout shift.
+            ph.style.cssText =
+                "display:inline-flex;align-items:center;justify-content:center;" +
+                "box-sizing:border-box;border:2px dashed #8a8a8a;border-radius:6px;" +
+                "background:#fafafa;color:#333;" +
+                "font:600 13px/1.35 -apple-system,system-ui,sans-serif;" +
+                "text-align:center;vertical-align:middle;overflow:hidden;cursor:pointer;" +
+                "padding:4px;" +
+                (w ? "width:" + w + "px;" : "min-width:96px;") +
+                (h ? "height:" + h + "px;" : "min-height:48px;");
+            ph.textContent = full ? (glyph + " " + full) : glyph;
+            ph.title = "";
+        }
+    }
+
+    function makePlaceholder(el, glyph, full) {
         var d = attrArea(el);
         var ph = document.createElement("span");
         ph.className = "eink-media-ph";
-        // Obviously an intentional tappable placeholder — NOT a broken image:
-        // dashed border, centered glyph + label, high-contrast greyscale on a
-        // LIGHT fill, sized to the element so there's no layout shift.
-        ph.style.cssText =
-            "display:inline-flex;align-items:center;justify-content:center;" +
-            "box-sizing:border-box;border:2px dashed #8a8a8a;border-radius:6px;" +
-            "background:#fafafa;color:#333;" +
-            "font:600 13px/1.35 -apple-system,system-ui,sans-serif;" +
-            "text-align:center;vertical-align:middle;overflow:hidden;cursor:pointer;" +
-            "padding:4px;" +
-            (d.w ? "width:" + d.w + "px;" : "min-width:96px;") +
-            (d.h ? "height:" + d.h + "px;" : "min-height:48px;");
-        ph.textContent = label;
+        ph.dataset.einkGlyph = glyph;
+        ph.dataset.einkFull = full;
+        ph.dataset.einkW = d.w;
+        ph.dataset.einkH = d.h;
+        stylePlaceholder(ph);
         return ph;
+    }
+
+    // Flip every placeholder on the page between chip and box, without touching the
+    // site's saved image policy (a transient per-page view toggle).
+    function restyleAllPlaceholders() {
+        try {
+            var phs = document.querySelectorAll(".eink-media-ph");
+            for (var i = 0; i < phs.length; i++) stylePlaceholder(phs[i]);
+        } catch (e) { log("restyle failed: " + e); }
+    }
+
+    function setCollapsed(val) {
+        collapsed = !!val;
+        try { browser.storage.local.set({ _collapsed: collapsed }); } catch (e) {}
+        restyleAllPlaceholders();
+        reportCollapsed();
+    }
+
+    function reportCollapsed() {
+        try { if (port) port.postMessage({ type: "collapsed", value: collapsed }); } catch (e) {}
     }
 
     function insertPlaceholder(el, ph) {
@@ -215,7 +269,7 @@
         if (img.dataset.einkDone) return;
         img.dataset.einkDone = "1";
         stashImg(img);
-        var ph = makePlaceholder(img, tapLoads ? "🖼 Tap to load" : "🖼 Image hidden");
+        var ph = makePlaceholder(img, "🖼", tapLoads ? "Tap to load" : "Image hidden");
         ph.addEventListener("click", function (e) {
             e.preventDefault(); e.stopPropagation();
             if (tapLoads) loadImg(img); else ph.remove();
@@ -271,7 +325,7 @@
         if (v.dataset.einkDone) return;
         v.dataset.einkDone = "1";
         stashVideo(v);
-        var ph = makePlaceholder(v, tapLoads ? "▶ Tap to load video" : "▶ Video hidden");
+        var ph = makePlaceholder(v, "▶", tapLoads ? "Tap to load video" : "Video hidden");
         ph.addEventListener("click", function (e) {
             e.preventDefault(); e.stopPropagation();
             if (tapLoads) loadVideo(v); else ph.remove();
@@ -288,7 +342,7 @@
         frame.dataset.einkDone = "1";
         frame.dataset.einkSrc = src;
         frame.removeAttribute("src"); // stops the embed fetching / autoplaying
-        var ph = makePlaceholder(frame, tapLoads ? "▶ Tap to load video" : "▶ Video hidden");
+        var ph = makePlaceholder(frame, "▶", tapLoads ? "Tap to load video" : "Video hidden");
         ph.addEventListener("click", function (e) {
             e.preventDefault(); e.stopPropagation();
             if (tapLoads) {
@@ -392,6 +446,8 @@
             port.onMessage.addListener(function (msg) {
                 if (!msg) return;
                 if (msg.type === "cyclePolicy") cyclePolicy();
+                else if (msg.type === "collapseToggle") setCollapsed(!collapsed);
+                else if (msg.type === "setCollapsed" && typeof msg.value === "boolean") setCollapsed(msg.value);
                 else if (msg.type === "allowed" && msg.urls) onAllowed(msg.urls);
                 else if (msg.type === "settings") {
                     if (typeof msg.animOff === "boolean") {
@@ -402,6 +458,7 @@
             });
             port.onDisconnect.addListener(function () { port = null; });
             reportPolicy();
+            reportCollapsed(); // let the native chrome label its collapse toggle
             checkLogin(); // port is now up — flush any pending login report
         } catch (e) {
             // No native bridge — media gating still works via DOM strip; only the
@@ -465,26 +522,28 @@
 
     function start() {
         try {
-            // Apply animations-off ASAP from the mirrored setting (default ON) so
-            // there's no animation flash before the native push arrives.
-            browser.storage.local.get("_animOff").then(function (r) {
-                applyAnimOff(!r || r._animOff !== false);
-            }, function () { applyAnimOff(true); });
-
-            browser.storage.local.get(HOST).then(function (res) {
-                if (res && res[HOST]) policy = res[HOST];
-                log("media policy for " + HOST + " = " + policy);
+            // One read for policy + the mirrored view settings, so animations-off,
+            // the collapse mode, and the per-host policy are all resolved BEFORE the
+            // first placeholders are built (no flash, no wrong-mode first paint).
+            browser.storage.local.get([HOST, "_collapsed", "_animOff"]).then(function (res) {
+                res = res || {};
+                applyAnimOff(res._animOff !== false);            // default ON
+                if (typeof res._collapsed === "boolean") collapsed = res._collapsed; // default true
+                if (res[HOST]) policy = res[HOST];
+                log("media policy for " + HOST + " = " + policy + " collapsed=" + collapsed);
                 connectNative();
                 applyPolicy();
                 startLoginWatch();
             }, function (e) {
-                log("storage.get failed, using default: " + e);
+                log("storage.get failed, using defaults: " + e);
+                applyAnimOff(true);
                 connectNative();
                 applyPolicy();
                 startLoginWatch();
             });
         } catch (e) {
             log("start failed: " + e);
+            applyAnimOff(true);
             applyPolicy();
         }
     }

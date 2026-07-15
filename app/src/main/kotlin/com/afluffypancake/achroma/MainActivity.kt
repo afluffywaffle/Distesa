@@ -91,6 +91,11 @@ class MainActivity : Activity() {
     private var blockFonts = true       // block web-font requests (system fallback)
     private var strictTp = true         // engine strict tracking protection
     private var jsEnabled = true        // per-session JavaScript
+
+    // Page-level media placeholder display: collapsed = tiny inline chips (default),
+    // else full sized boxes. Owned by images.js; mirrored here to label the toggle.
+    private var imagesCollapsed = true
+    private var collapseBtn: Button? = null
     private var fullEvery = 6           // EPD full-clear cadence (0 = Off)
 
     // Load-time measurement.
@@ -322,6 +327,16 @@ class MainActivity : Activity() {
             textSize = 20f
             setOnClickListener { if (::session.isInitialized) { session.reload(); afterNav() } }
         }
+        // Page-level collapse/expand-all: flip every placeholder on THIS page
+        // between tiny chips and full boxes, without changing the site's saved
+        // policy. ⊟ = collapse to chips, ⊞ = expand to boxes.
+        collapseBtn = Button(this).apply {
+            text = if (imagesCollapsed) "⊞" else "⊟"
+            setTextColor(CHROME_INK)
+            setBackgroundColor(Color.TRANSPARENT)
+            textSize = 20f
+            setOnClickListener { onToggleCollapse() }
+        }
         val gearBtn = Button(this).apply {
             text = "⚙"
             setTextColor(CHROME_INK)
@@ -335,6 +350,7 @@ class MainActivity : Activity() {
         bar.addView(backBtn)
         bar.addView(urlField, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         bar.addView(reloadBtn)
+        collapseBtn?.let { bar.addView(it) }
         bar.addView(gearBtn)
         return bar
     }
@@ -709,6 +725,12 @@ class MainActivity : Activity() {
                             imgToggle.text = "Images: ${shortPolicy(policy)}"
                         }
                     }
+                    // images.js reports the current collapse mode → label the toggle
+                    // (⊞ = tap to expand to boxes, ⊟ = tap to collapse to chips).
+                    "collapsed" -> {
+                        imagesCollapsed = obj.optBoolean("value", true)
+                        runOnUiThread { collapseBtn?.text = if (imagesCollapsed) "⊞" else "⊟" }
+                    }
                     // images.js found a password field on this host → remember it
                     // so tracking protection relaxes to Standard for its loads.
                     "loginHost" -> {
@@ -726,6 +748,20 @@ class MainActivity : Activity() {
 
         override fun onDisconnect(port: WebExtension.Port) {
             if (port == einkPort) einkPort = null
+        }
+    }
+
+    /** Flip all placeholders on the current page between chips and boxes (per-page, not persisted per-site). */
+    private fun onToggleCollapse() {
+        val port = einkPort
+        if (port == null) {
+            Log.w(TAG, "toggle collapse: no eink port yet")
+            return
+        }
+        try {
+            port.postMessage(org.json.JSONObject().put("type", "collapseToggle"))
+        } catch (e: Throwable) {
+            Log.w(TAG, "collapseToggle post threw ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
