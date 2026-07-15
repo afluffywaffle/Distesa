@@ -346,8 +346,12 @@ class MainActivity : Activity() {
     companion object {
         private const val TAG = "AchromaMain"
 
-        /** Ad/image-heavy test page — a realistic render/refresh workload. */
-        private const val TEST_URL = "https://www.theverge.com"
+        /**
+         * Text-based, low-JS, reliably scrollable page — makes tap-to-flip (and
+         * the flip → EPD refresh) easy to exercise on-device. It also has a mix of
+         * images (infobox + thumbnails) for testing the image-policy modes.
+         */
+        private const val TEST_URL = "https://en.wikipedia.org/wiki/E_Ink"
 
         /** Our bundled page-flip extension, loaded from assets via installBuiltIn. */
         private const val EINK_URI = "resource://android/assets/extensions/eink/"

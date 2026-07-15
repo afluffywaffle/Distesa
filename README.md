@@ -32,8 +32,10 @@ Maven Central, so `settings.gradle.kts` adds that repository.
 
 - Full-screen `GeckoView` backed by a singleton `GeckoRuntime` + `GeckoSession`
   (classic Views, not Compose).
-- Loads a deliberately ad/image-heavy page (`https://www.theverge.com`) so the
-  ad-blocking effect is visible.
+- Loads a text-based, low-JS, reliably scrollable test page
+  (`https://en.wikipedia.org/wiki/E_Ink`) so tap-to-flip and the flip → EPD
+  refresh are easy to exercise; it still has infobox/thumbnail images for testing
+  the image-policy modes.
 - Bundles our own **"eink" WebExtension** (`app/src/main/assets/extensions/eink/`)
   loaded at startup via `webExtensionController.installBuiltIn(...)`. It ports
   eita's "Page Scroll" quantized pagination and adapts it for e-ink: `content.js`
@@ -77,20 +79,28 @@ Maven Central, so `settings.gradle.kts` adds that repository.
     and reloads. `images.js` reports its current policy back up the port so the
     button can label itself.
 
-  **App↔extension messaging (GeckoView 152):** the bundled eink extension is
-  registered with a single `MessageDelegate` under GeckoView's special native-app
-  name `"browser"`. ext→app uses `runtime.sendMessage` → `onMessage` (page
-  flips); app→ext uses a long-lived **`Port`**: `images.js` calls
-  `runtime.connect()` → the app's `onConnect(port)`, and the app pushes commands
-  with `port.postMessage(...)` while receiving policy reports via a
-  `PortDelegate`. Requires the `nativeMessaging` + `geckoViewAddons` (+ `storage`)
-  manifest permissions.
+  **App↔extension messaging (GeckoView 152) — via a background relay:** GeckoView
+  exposes native messaging (`connectNative`/`sendNativeMessage`, which reach the
+  app's `MessageDelegate`) **only to background/extension pages, not content
+  scripts** — a content script's `runtime.sendMessage`/`connect()` go to the
+  extension's own background. So `background.js` is the bridge. The app registers a
+  single `MessageDelegate` under the native-app name `"browser"`:
+  - **Flip (ext→app):** `content.js` → `runtime.sendMessage({type:"flip"})` →
+    `background.js` `onMessage` → `sendNativeMessage("browser", …)` → app
+    `onMessage`.
+  - **Image policy (app↔ext):** `background.js` opens `connectNative("browser")` →
+    app `onConnect(port)`; `images.js` opens `runtime.connect()` to the background,
+    which relays both ways — app pushes `{type:"cyclePolicy"}` via
+    `port.postMessage`, `images.js` reports its current policy back up (received by
+    the app's `PortDelegate`) to label the button.
+
+  Requires the `nativeMessaging` + `geckoViewAddons` (+ `storage`) manifest
+  permissions and the `background` entry.
 - Ports the layuv e-ink refresh modules into `eink/` (`RattaEink`, `Epd`,
   `EdgeNavView`), decoupled from the layuv reader. `Epd` + `RattaEink` are now
-  **wired to page flips**: the eink content script sends a `{type:"flip"}` native
-  message (GeckoView delegate name `"browser"`, needing the `nativeMessaging` +
-  `geckoViewAddons` manifest permissions) on each flip; `MainActivity`'s
-  `MessageDelegate` posts `Epd.pageTurn(geckoView)` onto the view, which forces a
+  **wired to page flips**: on each flip `content.js` signals `{type:"flip"}` (via
+  the `background.js` relay described above) and `MainActivity`'s `MessageDelegate`
+  posts `Epd.pageTurn(geckoView)` onto the view, which forces a
   clean full-panel clear via `RattaEink.sendOneFullFrame` every `FULL_EVERY` (6)
   turns and lets the panel do a default partial update otherwise. `RattaEink`
   reflects into Supernote's hidden `EinkManager` and no-ops safely off-device.
@@ -134,10 +144,11 @@ notes/measurements as you go):
 
 | Check | Result |
 |---|---|
-| App launches, theverge.com renders | |
+| App launches, en.wikipedia.org/wiki/E_Ink renders | |
 | Idle RAM (MB) | |
 | Cold start (ms) | |
-| Page load — theverge.com (s) | |
+| Page load — wiki E Ink (s) | |
+| Flip fires native refresh (logcat: "flip -> partial refresh" / "EPD FULL CLEAR") | |
 | eink extension loads (logcat: "eink extension installed") | |
 | Tap right third → next page (instant jump, clean refresh) | |
 | Tap left third → previous page | |

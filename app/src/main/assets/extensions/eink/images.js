@@ -216,12 +216,14 @@
     // browser.storage.local, so the flow is: native pushes {type:"cyclePolicy"}
     // over the port; we compute the next policy, PERSIST it, then reload — the
     // fresh page load re-reads storage and re-applies. We also push our current
-    // policy up to native so it can label the button.
+    // policy up so it can label the button.
+    //
+    // Content scripts can't reach the app directly, so runtime.connect() targets
+    // our background.js, which bridges this port to the app's native Port
+    // (connectNative "browser" ⇄ onConnect). background relays both directions.
 
     function connectNative() {
         try {
-            // GeckoView routes runtime.connect() to the app's MessageDelegate that
-            // was registered under the special native-app name "browser".
             port = browser.runtime.connect({ name: "eink-images" });
             port.onMessage.addListener(function (msg) {
                 if (msg && msg.type === "cyclePolicy") cyclePolicy();
