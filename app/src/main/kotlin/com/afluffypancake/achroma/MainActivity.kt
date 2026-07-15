@@ -158,6 +158,10 @@ class MainActivity : Activity() {
                 return super.dispatchTouchEvent(ev)
             }
         }
+        // Light background so the INSET paging margins (revealed when the GeckoView
+        // is narrowed) read as white page-margin, never a dark band. Honors the
+        // "no dark chrome" rule.
+        root.setBackgroundColor(0xFFFFFFFF.toInt())
 
         // The GeckoView. In INSET mode we physically narrow it with real left/right
         // margins so the paging strips sit in empty margins (page reflows narrower);
