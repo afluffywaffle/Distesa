@@ -33,6 +33,7 @@
         "storage",
         "webRequest",
         "webRequestBlocking",
+        "webNavigation",
         "<all_urls>"
     ]
 }

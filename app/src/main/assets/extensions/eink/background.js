@@ -78,6 +78,31 @@ function maybeFlushCounters() {
     }
 }
 
+// Per top-level-page-load tally: an airtight A/B proof that cancelled requests
+// really aren't fetched. Reset on navigation start, logged ~8s after the page
+// completes so the final numbers are stable (not the too-early startup snapshot).
+var pageStats = { host: "", img: { seen: 0, cancel: 0, allow: 0 }, media: { seen: 0, cancel: 0, allow: 0 } };
+var tallyTimer = null;
+
+function resetStats(host) {
+    if (tallyTimer) { clearTimeout(tallyTimer); tallyTimer = null; }
+    pageStats = { host: host, img: { seen: 0, cancel: 0, allow: 0 }, media: { seen: 0, cancel: 0, allow: 0 } };
+}
+
+function bucketFor(type) {
+    return type === "media" ? pageStats.media : pageStats.img; // image + imageset
+}
+
+function schedulePageTally() {
+    if (tallyTimer) clearTimeout(tallyTimer);
+    tallyTimer = setTimeout(function () {
+        var i = pageStats.img, m = pageStats.media;
+        diag("page=" + pageStats.host + " policy=" + policyFor(pageStats.host) +
+            " img seen=" + i.seen + " cancelled=" + i.cancel + " allowed=" + i.allow +
+            " media seen=" + m.seen + " cancelled=" + m.cancel + " allowed=" + m.allow);
+    }, 8000);
+}
+
 function hostOf(url) {
     try { return new URL(url).hostname || "_local"; } catch (e) { return "_local"; }
 }
@@ -101,19 +126,22 @@ function stateFor(tabId, pageUrl) {
 function onBeforeMedia(details) {
     try {
         seenCount++;
+        var b = bucketFor(details.type);
+        b.seen++;
         // The page that owns the request (documentUrl for a subresource); fall
         // back to originUrl, then the request URL itself.
         var pageUrl = details.documentUrl || details.originUrl || details.url;
         var host = hostOf(pageUrl);
         var policy = policyFor(host);
 
-        if (policy === "load-all") { maybeFlushCounters(); return {}; }
+        if (policy === "load-all") { b.allow++; maybeFlushCounters(); return {}; }
 
         var st = stateFor(details.tabId, pageUrl);
-        if (st.allow.has(details.url)) { maybeFlushCounters(); return {}; }
+        if (st.allow.has(details.url)) { b.allow++; maybeFlushCounters(); return {}; }
 
         // hide-all / placeholder-tap / primary-content-only: block by default.
         cancelCount++;
+        b.cancel++;
         maybeFlushCounters();
         return { cancel: true };
     } catch (e) {
@@ -235,6 +263,23 @@ browser.runtime.onConnect.addListener(function (port) {
 });
 
 // --- Startup -------------------------------------------------------------
+
+// Per-page tally: reset counters when a top-level navigation starts, and log the
+// final numbers ~8s after it completes.
+try {
+    if (browser.webNavigation) {
+        browser.webNavigation.onBeforeNavigate.addListener(function (d) {
+            if (d.frameId === 0) resetStats(hostOf(d.url));
+        });
+        browser.webNavigation.onCompleted.addListener(function (d) {
+            if (d.frameId === 0) schedulePageTally();
+        });
+    } else {
+        diag("webNavigation unavailable — per-page tally disabled");
+    }
+} catch (e) {
+    diag("webNavigation setup threw: " + e);
+}
 
 loadPolicies();
 installNetworkBlock();
