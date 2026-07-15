@@ -36,11 +36,27 @@ Maven Central, so `settings.gradle.kts` adds that repository.
   ad-blocking effect is visible.
 - Bundles our own **"eink" WebExtension** (`app/src/main/assets/extensions/eink/`)
   loaded at startup via `webExtensionController.installBuiltIn(...)`. It ports
-  eita's "Page Scroll" quantized pagination and adapts it for e-ink: a content
-  script gives **tap-to-flip** page turning (tap the left third = previous page,
-  right third = next page, middle third ignored) using instant viewport jumps
+  eita's "Page Scroll" quantized pagination and adapts it for e-ink: `content.js`
+  gives **tap-to-flip** page turning (tap the left third = previous page, right
+  third = next page, middle third ignored) using instant viewport jumps
   (`scrollTo` with `behavior:"auto"` — no smooth scroll, which ghosts on EPD).
   Because we author it, it ships inside the APK — unlike third-party add-ons.
+- Gates images per-domain via `images.js` (a second content script, run at
+  `document_start` so it strips `src`/`srcset` before load; a MutationObserver
+  catches dynamically-added images). Four policies, cycled by an overlay button:
+  - **hide-all** — every `<img>` → placeholder; nothing loads; tapping a
+    placeholder dismisses it (pure declutter).
+  - **placeholder-tap** (default) — every `<img>` → placeholder; tapping it loads
+    that one image.
+  - **primary-content-only** — auto-loads the heuristic "primary" image(s) (area
+    ≥ 200×200 px **and** either inside `<main>`/`<article>`/`[role=main]` or ≥ 60%
+    of the page's largest image); everything else → tap-to-load placeholder.
+  - **load-all** — no-op.
+
+  Placeholders are inline text boxes sized to the image's rendered/attributed
+  dimensions (no layout shift, no external assets, "🖼 tap to load" label) and
+  restore `src`/`srcset`/`data-src` on tap. Policy persists in
+  `browser.storage.local` keyed by `location.hostname`, default `placeholder-tap`.
 - Installs uBlock Origin at **runtime from AMO** (not bundled in the APK). On
   first launch it calls `WebExtensionController.install(...)` with the AMO
   "latest" signed xpi:
@@ -50,12 +66,25 @@ Maven Central, so `settings.gradle.kts` adds that repository.
   `webExtensionController.list()` (matching add-on id `uBlock0@raymondhill.net`)
   instead of re-installing. Network/install failures log and leave the app
   usable — they do not crash.
-- Exposes a **minimal on-device toggle**: the GeckoView is wrapped in a
-  `FrameLayout` with a small top-right button labelled `uBO: on` / `uBO: off`.
-  Tapping it flips the add-on via `enable/disable(ext, EnableSource.USER)` and
-  reloads the page so the ad-blocking effect appears/disappears. This is a
-  standalone real add-on — updatable and toggleable, exactly like Firefox for
-  Android — not a frozen bundled extension.
+- Exposes two **minimal on-device overlay buttons** (top-right, stacked; no
+  settings UI yet):
+  - `uBO: on` / `uBO: off` — flips uBlock via `enable/disable(ext,
+    EnableSource.USER)` and reloads, so the ad-blocking effect appears/disappears.
+  - `IMG: <policy>` — cycles this domain's image policy
+    (hide-all → tap → primary → all → …). Since native code can't write
+    `browser.storage.local`, the button pushes `{type:"cyclePolicy"}` down the
+    **eink port** (see below); `images.js` computes the next policy, persists it,
+    and reloads. `images.js` reports its current policy back up the port so the
+    button can label itself.
+
+  **App↔extension messaging (GeckoView 152):** the bundled eink extension is
+  registered with a single `MessageDelegate` under GeckoView's special native-app
+  name `"browser"`. ext→app uses `runtime.sendMessage` → `onMessage` (page
+  flips); app→ext uses a long-lived **`Port`**: `images.js` calls
+  `runtime.connect()` → the app's `onConnect(port)`, and the app pushes commands
+  with `port.postMessage(...)` while receiving policy reports via a
+  `PortDelegate`. Requires the `nativeMessaging` + `geckoViewAddons` (+ `storage`)
+  manifest permissions.
 - Ports the layuv e-ink refresh modules into `eink/` (`RattaEink`, `Epd`,
   `EdgeNavView`), decoupled from the layuv reader. `Epd` + `RattaEink` are now
   **wired to page flips**: the eink content script sends a `{type:"flip"}` native
@@ -115,6 +144,12 @@ notes/measurements as you go):
 | Tap middle third → no page flip (links still work) | |
 | uBlock installs from AMO (logcat: "uBlock installed") | |
 | `uBO: on/off` toggle changes ad blocking after reload | |
+| `IMG:` button shows current policy (default `tap`) once page loads | |
+| Cycle `IMG:` → `hidden`: all images become "🖼 image hidden" boxes | |
+| Cycle `IMG:` → `tap`: boxes say "tap to load"; tapping one loads that image | |
+| Cycle `IMG:` → `primary`: main/large image loads, ads/thumbs stay placeholders | |
+| Cycle `IMG:` → `all`: every image loads normally | |
+| Image policy persists per-domain across reloads/relaunch | |
 | Refresh / ghosting quality on page flip (subjective) | |
 
 ## Build config (mirrors layuv android_native, known-good)

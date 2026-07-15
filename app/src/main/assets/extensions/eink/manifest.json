@@ -10,11 +10,18 @@
         }
     },
 
-    "content_scripts": [{
-        "js": [ "content.js" ],
-        "matches": [ "<all_urls>" ],
-        "run_at": "document_idle"
-    }],
+    "content_scripts": [
+        {
+            "js": [ "content.js" ],
+            "matches": [ "<all_urls>" ],
+            "run_at": "document_idle"
+        },
+        {
+            "js": [ "images.js" ],
+            "matches": [ "<all_urls>" ],
+            "run_at": "document_start"
+        }
+    ],
 
-    "permissions": [ "nativeMessaging", "geckoViewAddons" ]
+    "permissions": [ "nativeMessaging", "geckoViewAddons", "storage" ]
 }

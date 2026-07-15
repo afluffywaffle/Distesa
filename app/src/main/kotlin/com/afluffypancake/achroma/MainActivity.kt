@@ -42,10 +42,14 @@ class MainActivity : Activity() {
     private lateinit var session: GeckoSession
     private lateinit var view: GeckoView
     private lateinit var toggle: Button
+    private lateinit var imgToggle: Button
 
     /** The installed uBlock Origin add-on, once resolved (install or list). */
     private var ublock: WebExtension? = null
     private var busy = false
+
+    /** Live port to the eink content script (images.js), for the image-policy cycle. */
+    private var einkPort: WebExtension.Port? = null
 
     /**
      * Native EPD refresh driver for the GeckoView surface. On each page flip the
@@ -80,12 +84,29 @@ class MainActivity : Activity() {
             isEnabled = false
             setOnClickListener { onToggleClicked() }
         }
-        val lp = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT,
-            Gravity.TOP or Gravity.END,
+        root.addView(
+            toggle,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.END,
+            ),
         )
-        root.addView(toggle, lp)
+        // Second overlay button: cycles the current domain's image policy. Sits
+        // just below the uBO button (same minimal style).
+        imgToggle = Button(this).apply {
+            text = "IMG: …"
+            isEnabled = false
+            setOnClickListener { onCycleImagePolicy() }
+        }
+        root.addView(
+            imgToggle,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.END,
+            ).apply { topMargin = 140 },
+        )
         setContentView(root)
 
         session.loadUri(TEST_URL)
@@ -122,6 +143,7 @@ class MainActivity : Activity() {
      * flipping pages even if the native refresh path errors.
      */
     private val FlipMessageDelegate = object : WebExtension.MessageDelegate {
+        // content.js signals each page flip via runtime.sendMessage → onMessage.
         override fun onMessage(
             nativeApp: String,
             message: Any,
@@ -138,6 +160,58 @@ class MainActivity : Activity() {
             }
             return null
         }
+
+        // images.js opens a long-lived port via runtime.connect → onConnect. We
+        // keep the latest port (a page navigation replaces it) to push policy
+        // cycle commands, and read its policy reports back to label the button.
+        override fun onConnect(port: WebExtension.Port) {
+            einkPort = port
+            port.setDelegate(EinkPortDelegate)
+            runOnUiThread { imgToggle.isEnabled = true }
+        }
+    }
+
+    private val EinkPortDelegate = object : WebExtension.PortDelegate {
+        override fun onPortMessage(message: Any, port: WebExtension.Port) {
+            try {
+                val obj = message as? org.json.JSONObject ?: return
+                if (obj.optString("type") == "policy") {
+                    val policy = obj.optString("policy")
+                    runOnUiThread {
+                        imgToggle.isEnabled = true
+                        imgToggle.text = "IMG: ${shortPolicy(policy)}"
+                    }
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "port message handling threw ${e.javaClass.simpleName}: ${e.message}")
+            }
+        }
+
+        override fun onDisconnect(port: WebExtension.Port) {
+            if (port == einkPort) einkPort = null
+        }
+    }
+
+    /** Ask the content script to advance this domain's image policy (it persists + reloads). */
+    private fun onCycleImagePolicy() {
+        val port = einkPort
+        if (port == null) {
+            Log.w(TAG, "cycle image policy: no eink port yet")
+            return
+        }
+        try {
+            port.postMessage(org.json.JSONObject().put("type", "cyclePolicy"))
+        } catch (e: Throwable) {
+            Log.w(TAG, "cyclePolicy post threw ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    private fun shortPolicy(policy: String): String = when (policy) {
+        "hide-all" -> "hidden"
+        "placeholder-tap" -> "tap"
+        "primary-content-only" -> "primary"
+        "load-all" -> "all"
+        else -> policy
     }
 
     private fun onFlip() {
