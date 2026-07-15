@@ -291,6 +291,8 @@ class MainActivity : Activity() {
         backBtn = Button(this).apply {
             text = "‹"
             setTextColor(CHROME_INK)
+            setBackgroundColor(Color.TRANSPARENT) // no dark button fill; glyph on light bar
+            textSize = 22f
             isEnabled = false
             setOnClickListener {
                 if (::session.isInitialized && canGoBack) { session.goBack(); afterNav() }
@@ -316,11 +318,15 @@ class MainActivity : Activity() {
         val reloadBtn = Button(this).apply {
             text = "⟳"
             setTextColor(CHROME_INK)
+            setBackgroundColor(Color.TRANSPARENT)
+            textSize = 20f
             setOnClickListener { if (::session.isInitialized) { session.reload(); afterNav() } }
         }
         val gearBtn = Button(this).apply {
             text = "⚙"
             setTextColor(CHROME_INK)
+            setBackgroundColor(Color.TRANSPARENT)
+            textSize = 20f
             setOnClickListener {
                 settingsPanel.visibility =
                     if (settingsPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
@@ -536,7 +542,7 @@ class MainActivity : Activity() {
     }
 
     private fun makeButton(label: String, onClick: () -> Unit): Button =
-        Button(this).apply { text = label; setTextColor(CHROME_INK); setOnClickListener { onClick() } }
+        Button(this).apply { text = label; setTextColor(CHROME_INK); setBackgroundColor(Color.TRANSPARENT); setOnClickListener { onClick() } }
 
     /** A button whose label is re-read from [label] after each tap (cycle control). */
     private fun makeCycleRow(label: () -> String, onClick: () -> Unit): Button {
