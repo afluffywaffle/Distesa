@@ -5,13 +5,48 @@ Threads: `phase1` (Distesa Phase-1 UI/media/settings + naming)
 ---
 
 ## Thread: phase1
-_Updated 2026-07-16 (session d)_
+_Updated 2026-07-16 (session e)_
 
-### Session 2026-07-16 (d): edge-nav capsule redesign + lockout fix — UNCOMMITTED
+### Session 2026-07-16 (e): nav-strip recreate lockout — DIAGNOSED, FIXED, COMMITTED (`692ee11`)
+
+Symptom the user hit: **paging strips did nothing on tap; the sliver still worked.**
+Triggered by toggling nav-strip config settings. Diagnosed on the **Nomad** via adb
+(`input tap` + `screencap` + logcat) and fixed.
+
+**Root cause:** any settings toggle that calls `recreate()` rebuilds `MainActivity`, but
+`einkPort` was a PER-ACTIVITY field reset to `null` on recreate. The native `onConnect`
+that sets it fires only from `background.js`'s ONE-TIME `connectNative` at startup — the
+GeckoRuntime + extension + background page are a **process-wide singleton** that outlive
+the Activity — so the rebuilt Activity never re-bound a port and `flipPage`'s
+`einkPort ?: return` silently swallowed every tap. Sliver survived because it's pure
+native UI (no port). Reproduced deterministically by forcing recreate via
+`settings put system font_scale 1.15`.
+
+**Fix (in `692ee11`):**
+- `MainActivity`: `einkPort` → process-wide `@Volatile` companion field; `onCreate`
+  force-disconnects any stale port so `background.js` self-heals with a fresh
+  `connectNative` bound to the new Activity; `onDisconnect` clears only a matching port;
+  `flipPage` now **logs** `flipPage: no eink port — dropped <dir>` instead of failing
+  silently (this silence is what made it so hard to spot).
+- `background.js`: reconnect the native port on disconnect (5-failure cap) + reopen on a
+  content-script connect when null.
+- **Verified on-device:** after a forced recreate a strip tap again SCROLLS + logs
+  `flip -> partial refresh`; before the fix it was dead with zero logs. No lifecycle
+  regression (`onDestroy` only closes the session; shared port guarded by "clear if same").
+
+Diagnostic gotcha worth remembering: `screencap` reads the Android framebuffer, NOT the
+physical EPD — a scroll can show in `screencap` while the panel looks frozen. Use the
+`flip -> partial refresh` logcat line as the ground-truth oracle for "the flip fired".
+
+**Two new backlog items added this session** (see the Open/next backlog list below):
+e-ink tap-feedback "highlight" on the nav button; white outline on the globe sliver icon.
+
+---
+
+### Session 2026-07-16 (d): edge-nav capsule redesign + lockout fix — COMMITTED (in `692ee11`)
 
 On-device on the **Nomad** (`SN078C10005528`; also Tailscale `100.67.164.61:5555`,
-hidden_api_policy already 0). Fresh build installed. **Changes are on disk, NOT
-committed** — decide whether to commit the bundle.
+hidden_api_policy already 0). **Committed** as part of the `692ee11` bundle (with session e).
 
 Done & verified on-device (screenshots):
 1. **Edge nav → one continuous capsule.** `EdgeNavView` now draws a single rounded
@@ -38,7 +73,7 @@ Done & verified on-device (screenshots):
 - Guard currently overrides the stored slot at LOAD only, doesn't rewrite the saved
   pref — so re-enabling the left rail reverts the right to its saved "collapse". User
   may want the forced-chrome to PERSIST instead. (Decide + optionally write pref.)
-- Then: commit the whole bundle (capsule + drawn icon + alignment + guard fix).
+- ~~Then: commit the whole bundle~~ — DONE, committed `692ee11` (session e).
 
 Files touched (uncommitted): `eink/EdgeNavView.kt` (rewritten), `eink/GlobeSearchDrawable.kt`
 (new), `MainActivity.kt` (addStrip capReserve/span, makeSliverButton drawn icon +
@@ -286,17 +321,19 @@ Shipped (committed; `88c87ba` zapper, `9d57737` the rest):
   `[eink-ime]` under tag DistesaMain.
 
 ### Next session — paste this to start
-> Resume **Distesa**, thread **phase1** (repo ~/Develop/Distesa, tip of branch
-> `ime-input-fixes`, unpushed). Last session fixed the address-bar input chain on the
-> **Manta** (verified on-device): edge-to-edge IME insets, showSoftInput under
-> adjustNothing, robust Enter, an onLoadError e-ink error page, the hidden
-> `getInputMethodWindowVisibleHeight()` lift so the handwriting autocomplete no longer
-> covers the bar, floating-pane styling + resting edge-gap. Read `HANDOFF.md` → `##
-> Thread: phase1` (session b) and the `handoff_phase1` memory; **also read
-> `~/Develop/supernote-dev-reference/README.md` before any Supernote work.** Device: Manta
-> serial `SN100C10008955` over Tailscale `100.98.2.91:5555` (`hidden_api_policy` already
-> 0). First task: **verify the same IME flow on the Nomad** (bottom-chrome by default;
-> confirm `getInputMethodWindowVisibleHeight` returns non-negative and the lift/pane look
-> right), then decide whether to push/merge `ime-input-fixes`. Backlog (in the Open/next
-> list): page-flip distance calibration (~75% + user setting), domain/title bar,
-> auto-focus address bar on chrome reveal.
+> Resume **Distesa**, thread **phase1** (repo ~/Develop/Distesa, branch `main`, tip
+> `692ee11`, unpushed). Last session diagnosed + fixed the **nav-strip recreate lockout**
+> (paging strips went dead after any settings toggle that calls `recreate()`, because
+> `einkPort` reset to null and never re-bound) and committed the whole edge-nav bundle
+> (capsule redesign + drawn globe icon + this lockout fix). Verified on the **Nomad**.
+> Read `HANDOFF.md` → `## Thread: phase1` (sessions e + d) and the `handoff_phase1`
+> memory; **also read `~/Develop/supernote-dev-reference/README.md` before any Supernote
+> work.** Device: Nomad serial `SN078C10005528` over Tailscale `100.67.164.61:5555`
+> (`hidden_api_policy` already 0); adb at `~/Library/Android/sdk/platform-tools/adb`;
+> package `com.afluffywaffle.distesa.dev`; build `./gradlew installDebug`. First task —
+> pick one of the two fresh **Sonnet-sized** backlog items: (1) **e-ink tap-feedback
+> highlight** on the nav button (brief heavier OUTLINE on ACTION_DOWN in `EdgeNavView`,
+> static stroke, no animation), or (2) **white outline on the globe sliver icon** in
+> `GlobeSearchDrawable.kt` (match the magnifier's outline so the globe reads on dark
+> backgrounds). Both are in the Open/next backlog list. Also parked: divider-length tune
+> + whether the chrome-slot guard should persist to the saved pref. Consider pushing.
