@@ -70,8 +70,8 @@ GeckoView gives plumbing via `Autocomplete.StorageDelegate` (`onLoginSave`/`onLo
 - [ ] **`AutoApprovePromptDelegate`** auto-grants add-on install + permission prompts —
       test spike; must not ship. An add-on/permission grant is high-privilege.
 - [ ] **WebExtension install approval** — require explicit user consent; don't auto-approve.
-- [ ] **`allowBackup=true`** — lets `adb backup` extract app data dirs (incl. any future
-      credential DB / cookies). Set `allowBackup=false`.
+- [x] **`allowBackup`** — set to `false` (was `true`; `adb backup` could extract cookies /
+      profile / any future credential DB). Done 2026-07-15.
 - [ ] **Debug keystore + no minify** on release — sign release properly; enable R8/minify.
 - [ ] **Certificate-error UI** — `onLoadError` SECURITY category / `SslError`: show a real
       interstitial; never silently allow a cert override (MITM risk).
@@ -79,4 +79,40 @@ GeckoView gives plumbing via `Autocomplete.StorageDelegate` (`onLoginSave`/`onLo
 - [ ] **ETP look-alike host matching** — label-boundary match only (fixed once; keep the
       invariant if the allowlist logic changes).
 
-_Last updated 2026-07-15. Device findings from the Manta (serial SN100C10008955)._
+## Engine surface & runtime posture (audited 2026-07-15)
+- [ ] **Content `PermissionDelegate` missing** — no `GeckoSession.PermissionDelegate` is set,
+      so geolocation / camera / mic / notifications / autoplay requests are unhandled. Add a
+      delegate that **denies by default** (or prompts). Distinct from the extension delegate.
+- [ ] **HTTPS-only mode** — nothing enforces HTTPS. Enable HTTPS-only + a plaintext warning
+      (portable device on hostile Wi-Fi = real MITM threat; cf. the 2026-07-15 DNS incident).
+- [ ] **Safe Browsing explicit** — only ETP/anti-tracking is configured; `ContentBlocking.
+      SafeBrowsing` is untouched (likely default-on). Set it explicitly so a refactor can't
+      silently drop malware/phishing blocking.
+- [ ] **Extension process isolation** — `extensionsProcessEnabled(false)`: extensions run in
+      the MAIN process. Fine for pinned uBlock; **revisit (enable isolation) before allowing
+      user-installed extensions** — untrusted extension in main process = large blast radius.
+- [ ] **Extension supply chain** — uBlock is pinned to AMO `latest.xpi` (auto-follows). A
+      compromised upstream is pulled automatically. Decide: auto-latest (gets fixes) vs. pin
+      a reviewed version (smaller supply-chain window).
+- [ ] **UI-spoofing / hidden chrome** — with chrome hidden and no persistent URL, a page can
+      draw fake browser UI. The planned **domain/title bar is an anti-phishing control**, not
+      just convenience — treat as security-relevant.
+- [ ] **Downloads** — not wired today (no `ContentDelegate` download handling). If added,
+      never auto-open; scope save location + type handling (arbitrary download+open vector).
+- [ ] **Clear-on-exit / data-at-rest** — a reading tablet gets carried/lost. Consider a
+      "clear browsing data" action; rely on device lock + `allowBackup=false` for the rest.
+
+## Zero-day / n-day posture (the actual worry)
+An unknown engine zero-day can't be *prevented*; you shrink the **window** and the **blast
+radius**. Most real-world "zero-day" browser compromises are **n-days** — public, patched
+bugs hitting someone who didn't update. So:
+- [ ] **GeckoView update cadence (highest-leverage item)** — bundled engines don't auto-
+      update. Track a schedule to bump the GeckoView dependency and watch **Mozilla Security
+      Advisories (MFSA)**. This is the primary defense; everything else is secondary.
+- [ ] **Blast-radius reduction** — keep content multiprocess/sandboxed, move toward extension
+      isolation, least-privilege permissions, so a content-process compromise can't own the
+      app or device.
+- [ ] **App dependency supply chain** — consider Gradle dependency verification / lockfile so
+      a poisoned build-time dependency can't slip in. (Lower priority.)
+
+_Last updated 2026-07-15. Device + code audit from the Manta (serial SN100C10008955)._
