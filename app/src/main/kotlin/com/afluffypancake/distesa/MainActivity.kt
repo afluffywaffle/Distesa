@@ -212,8 +212,13 @@ class MainActivity : Activity() {
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, edge,
             ).apply {
-                if (navPlacement != "right") leftMargin = stripW
-                if (navPlacement != "left") rightMargin = stripW
+                // Inset from the strips (or a small gap where there's no strip) so the
+                // pane's border never sits flush against a screen edge and gets clipped.
+                leftMargin = if (navPlacement != "right") stripW else CHROME_EDGE_GAP
+                rightMargin = if (navPlacement != "left") stripW else CHROME_EDGE_GAP
+                // Resting gap off the anchored edge so the pane's bottom (or top) border
+                // and rounded corners are fully visible. The IME-lift overrides this.
+                if (chromeAtBottom) bottomMargin = CHROME_EDGE_GAP else topMargin = CHROME_EDGE_GAP
             },
         )
 
@@ -532,13 +537,19 @@ class MainActivity : Activity() {
         liftChromeForIme(lift)
     }
 
-    /** Sets the bottom-edge chrome bar's lift to exactly [px] (0 = flush). No-op when
-     *  chrome is top-anchored (IME can't cover it there). */
+    /** Small resting gap (px) between the pane and its anchored screen edge so its
+     *  border/rounded corners aren't clipped. The IME-lift overrides this. */
+    private val CHROME_EDGE_GAP get() = dp(6)
+
+    /** Lifts the bottom-edge chrome pane by [px] above the IME; when [px] is 0 (docked)
+     *  it rests at CHROME_EDGE_GAP so its bottom border stays visible. No-op when chrome
+     *  is top-anchored (IME can't cover it there). */
     private fun liftChromeForIme(px: Int) {
         if (!chromeAtBottom || !::chromeBar.isInitialized) return
         val lp = chromeBar.layoutParams as? FrameLayout.LayoutParams ?: return
-        if (lp.bottomMargin == px) return
-        lp.bottomMargin = px
+        val margin = if (px > 0) px else CHROME_EDGE_GAP
+        if (lp.bottomMargin == margin) return
+        lp.bottomMargin = margin
         chromeBar.layoutParams = lp
     }
 

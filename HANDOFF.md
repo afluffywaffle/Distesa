@@ -52,10 +52,24 @@ backs up with `~/Develop`; NOT in hidden `.claude`). Device ID by serial, hidden
 unlock, EPD `EinkManager` reflection, pen vs. text-IME, the full IME playbook, e-ink UI
 rules, DNS diagnosis. **Read it first for any future Supernote work.**
 
-**Open / next:** commit (this session) landing now; still to verify on the **Nomad**
-(bottom-chrome by default — the IME poll + hidden-API should behave the same, confirm
-`getInputMethodWindowVisibleHeight` returns non-negative there too). Deferred opt batch
-#2 and deferred security items from session (a) still stand (below).
+**Open / next:**
+- Verify on the **Nomad** (bottom-chrome by default — the IME poll + hidden-API should
+  behave the same; confirm `getInputMethodWindowVisibleHeight` returns non-negative there).
+- **Page-flip distance calibration (NEW backlog):** the paging strip currently advances
+  ~a FULL screen per push, which is jarring. Try advancing **~75% of the screen** (a
+  25% overlap band) so the reader keeps context between flips. Needs on-device testing;
+  likely wants a **user adjustment setting** (overlap %). Applies to the native
+  EdgeNavView paging (see `EdgeNavView.kt` + the flip handler in `MainActivity.kt`).
+- **Domain/title bar (NEW backlog):** a thin bar showing the current site's name/URL
+  (domain) so the user knows where they are. Open Q: persistently pinned on top, or
+  attached to / revealed with the address bar? Decide the anchoring before building.
+- **Auto-focus address bar on chrome reveal (NEW backlog):** since chrome is hidden by
+  default, tapping the chrome-reveal (sliver ☰) should focus the address field so the
+  user can type immediately without a second tap. Especially important for top-anchored
+  chrome. (Small change: `urlField.requestFocus()` + showSoftInput in the reveal path —
+  but consider that the user may reveal chrome just to hit Back/⟳, so maybe only
+  auto-focus on a dedicated "address" affordance, not every reveal.)
+- Deferred opt batch #2 and deferred security items from session (a) still stand (below).
 
 ---
 
