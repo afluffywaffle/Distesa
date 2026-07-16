@@ -5,11 +5,59 @@ Threads: `phase1` (Distesa Phase-1 UI/media/settings + naming)
 ---
 
 ## Thread: phase1
-_Updated 2026-07-15_
+_Updated 2026-07-15 (session b)_
 
 **Project:** Distesa — minimal e-ink web browser for Supernote Nomad/Manta (GeckoView).
 Formerly "Achroma". Local path `~/Develop/Achroma` (folder NOT renamed). Public repo:
-**https://github.com/afluffywaffle/Distesa**. HEAD `9d57737`.
+**https://github.com/afluffywaffle/Distesa**.
+
+---
+
+### Session 2026-07-15 (b): address-bar IME / input on Manta
+
+Goal: verify the IME-lift on the Manta (10.7", top-chrome by default). Made chrome
+position user-overridable and forced `chromePos=bottom` to exercise the bottom-chrome
+IME path on the large screen. This surfaced a chain of real input bugs, all fixed and
+**verified on-device (Manta, serial `SN100C10008955`, ADB over Tailscale `100.98.2.91:5555`)**.
+
+**Fixed (all in `MainActivity.kt`):**
+1. **IME insets never dispatched** → added `window.setDecorFitsSystemWindows(false)` in
+   onCreate. Without edge-to-edge the decor view swallows `ime()` insets and the
+   OnApplyWindowInsetsListener never fires (not even inset=0).
+2. **Typing dropped** → `adjustNothing` suppresses the keyboard auto-show, so the served
+   view stayed on the DecorView. Now explicitly `imm.showSoftInput(field)` on focus.
+3. **Enter did nothing / just closed** → the Supernote keyboard reports Enter as GO,
+   DONE/SEARCH, or a raw `KEYCODE_ENTER` depending on mode. Now accept all editor-action
+   variants AND a separate `OnKeyListener` for raw ENTER.
+4. **Silent about:blank on failure** → added `NavigationDelegate.onLoadError` returning a
+   flat, high-contrast e-ink `data:` **error page** ("Page didn't load" + reason + host).
+   (The about:blank we chased was actually a **Wi-Fi DNS failure**, not the app — see ref.)
+5. **Address bar covered by handwriting autocomplete** → the crux. The public `ime()`
+   inset UNDER-reports the IME window by the candidate-strip height (~175px; window top
+   1570 vs inset top 1745 on Manta), and the strip appears with no inset event. Fixed
+   with the **hidden `InputMethodManager.getInputMethodWindowVisibleHeight()`** (greylisted,
+   works because `hidden_api_policy=0`) — returns the TRUE height (~990) incl. strip.
+   **Polled every 200ms while focused** (no inset event when the strip appears); falls
+   back to `ime()` inset + `dp(64)` reserve if the method is missing.
+6. **Lifted bar looked "ripped off"** → styled the chrome/address bar as a bordered
+   rounded **floating pane** (no elevation — e-ink halo rule), so the lift reads as
+   deliberate.
+
+**Toolbar position** is now user-overridable (quick panel: Auto/Top/Bottom; auto = top
+on ≥9", bottom on <9"). This already existed; confirmed working.
+
+**Cross-project deliverable:** consolidated ALL Supernote findings (this session +
+layuv's EPD/pen) into **`~/Develop/supernote-dev-reference/README.md`** (visible folder,
+backs up with `~/Develop`; NOT in hidden `.claude`). Device ID by serial, hidden_api
+unlock, EPD `EinkManager` reflection, pen vs. text-IME, the full IME playbook, e-ink UI
+rules, DNS diagnosis. **Read it first for any future Supernote work.**
+
+**Open / next:** commit (this session) landing now; still to verify on the **Nomad**
+(bottom-chrome by default — the IME poll + hidden-API should behave the same, confirm
+`getInputMethodWindowVisibleHeight` returns non-negative there too). Deferred opt batch
+#2 and deferred security items from session (a) still stand (below).
+
+---
 
 ### What this session did & why
 Started by testing the element **zapper** on-device (the prior open task), then turned

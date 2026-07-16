@@ -139,6 +139,13 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // Edge-to-edge: required for the IME (and system-bar) insets to be dispatched
+        // to our OnApplyWindowInsetsListener. Without this the decor view fits system
+        // windows and consumes ime() insets before they reach `root`, so the address
+        // bar can never lift above the on-screen input panel (adjustNothing alone is
+        // not enough). See liftChromeForIme / the root insets listener below.
+        window.setDecorFitsSystemWindows(false)
+
         loadSettings()
 
         val runtime = sharedRuntime(this)
@@ -228,9 +235,8 @@ class MainActivity : Activity() {
         // won't move anything for us, so we read the live IME inset and lift the bar by
         // exactly that height (adapts to any keyboard/panel; see liftChromeForIme).
         root.setOnApplyWindowInsetsListener { v, insets ->
-            val imeBottom = insets.getInsets(WindowInsets.Type.ime()).bottom
-            Log.i(TAG, "[eink-ime] inset=$imeBottom urlFocus=${::urlField.isInitialized && urlField.hasFocus()}")
-            liftChromeForIme(if (::urlField.isInitialized && urlField.hasFocus()) imeBottom else 0)
+            imeInsetLast = insets.getInsets(WindowInsets.Type.ime()).bottom
+            applyImeLift()
             v.onApplyWindowInsets(insets)
         }
 
@@ -311,8 +317,17 @@ class MainActivity : Activity() {
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(0xF5FAFAFA.toInt()) // near-white, high-contrast, no colour
-            setPadding(dp(6), dp(4), dp(6), dp(4))
+            // Floating pane, not an edge bar: a defined 2px border + rounded corners so
+            // that when it's lifted above the IME (leaving a gap below) it reads as a
+            // deliberate floating control, not a bar torn off the screen edge. No
+            // elevation — on e-ink a drop shadow renders as a grey halo (same rule as
+            // the settings panel; flat surfaces only).
+            background = GradientDrawable().apply {
+                setColor(0xFFFAFAFA.toInt())
+                setStroke(dp(2), 0xFF555555.toInt())
+                cornerRadius = dp(10).toFloat()
+            }
+            setPadding(dp(8), dp(6), dp(8), dp(6))
             visibility = View.GONE
             // Any touch within the chrome resets the (generous) idle timer, unless
             // the address field is focused (then it's pinned open).
@@ -336,8 +351,26 @@ class MainActivity : Activity() {
             setSelectAllOnFocus(true)
             inputType = InputType.TYPE_TEXT_VARIATION_URI
             imeOptions = EditorInfo.IME_ACTION_GO
-            setOnEditorActionListener { _, actionId, _ ->
-                if (actionId == EditorInfo.IME_ACTION_GO) { submitUrl(text.toString()); true } else false
+            setOnEditorActionListener { _, actionId, event ->
+                // The Supernote keyboard reports its enter key inconsistently — sometimes
+                // GO, sometimes DONE/SEARCH/UNSPECIFIED, sometimes just a raw ENTER key
+                // event (actionId == IME_ACTION_NONE). Accept any of them as "submit".
+                val isSubmit = actionId == EditorInfo.IME_ACTION_GO ||
+                    actionId == EditorInfo.IME_ACTION_SEARCH ||
+                    actionId == EditorInfo.IME_ACTION_DONE ||
+                    actionId == EditorInfo.IME_ACTION_NEXT ||
+                    (event != null && event.keyCode == android.view.KeyEvent.KEYCODE_ENTER &&
+                        event.action == android.view.KeyEvent.ACTION_DOWN)
+                if (isSubmit) { submitUrl(text.toString()); true } else false
+            }
+            // Some Supernote input modes deliver ENTER as a raw key event to the view
+            // rather than firing onEditorAction — catch that path too so submit is
+            // reliable regardless of which on-screen keyboard/handwriting mode is active.
+            setOnKeyListener { _, keyCode, event ->
+                if (keyCode == android.view.KeyEvent.KEYCODE_ENTER &&
+                    event.action == android.view.KeyEvent.ACTION_UP) {
+                    submitUrl(text.toString()); true
+                } else false
             }
             // Focus pins the chrome open indefinitely so the user can type; losing
             // focus restarts the generous idle timer. On focus we also lift the whole
@@ -346,8 +379,24 @@ class MainActivity : Activity() {
             // address bar (and its suggestions) gets covered. Top-edge entry is clear
             // of it. Restored to the configured edge on blur.
             setOnFocusChangeListener { _, hasFocus ->
-                if (hasFocus) ui.removeCallbacks(autoHide)
-                else { liftChromeForIme(0); scheduleAutoHide() }
+                if (hasFocus) {
+                    ui.removeCallbacks(autoHide)
+                    // Explicitly show + bind the IME to this field: adjustNothing
+                    // suppresses the auto-show, otherwise the served view stays on the
+                    // DecorView and typing never reaches us. Once the IME is up, the
+                    // window-insets listener lifts the (bottom) bar by the LIVE ime()
+                    // inset so it sits just above the panel — and grows with it when the
+                    // ink-writer's candidate/autocomplete strip appears (lift-in-place).
+                    val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                    ui.post { imm?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT) }
+                    // The candidate/autocomplete strip appears/grows AFTER show without
+                    // firing an inset event, so poll the true IME height while focused.
+                    ui.removeCallbacks(imePoll); ui.post(imePoll)
+                } else {
+                    ui.removeCallbacks(imePoll)
+                    liftChromeForIme(0)
+                    scheduleAutoHide()
+                }
             }
         }
         val reloadBtn = Button(this).apply {
@@ -409,18 +458,87 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Lift the (bottom-edge) chrome bar by [imeBottomPx] so it sits JUST ABOVE the
-     * on-screen input window — the Supernote handwriting panel and its autocomplete
-     * strip live inside one bottom-docked IME window, so its inset height is exactly
-     * the gap we need. Driven by the window-insets listener with the live IME height,
-     * so it adapts to any keyboard on any device (Nomad panel, Manta keyboard) with
-     * no hardcoded sizes. No-op when chrome is top-anchored (IME can't cover it there).
+     * Lift the (bottom-edge) chrome bar by [imeBottomPx] (the live ime() inset) so it
+     * sits just above the on-screen input window, PLUS a fixed reserve for the Supernote
+     * handwriting engine's candidate/autocomplete strip. That strip lives inside the IME
+     * window but ABOVE the reported ime() inset — the IME under-reports its height by
+     * ~175px (measured via dumpsys: window frame top 1570 vs ime inset top 1745), so the
+     * strip would otherwise cover the lifted bar. The reserve adds a small gap above the
+     * plain keyboard (where there is no strip) but keeps the bar clear in handwriting
+     * mode. No-op when chrome is top-anchored (IME can't cover it there).
      */
-    private fun liftChromeForIme(imeBottomPx: Int) {
+    /**
+     * Fallback reserve (px) for the handwriting candidate strip, used ONLY when the
+     * hidden true-height API is unavailable. ~175px measured; dp(64)≈192px for headroom.
+     */
+    private val IME_CANDIDATE_RESERVE get() = dp(64)
+
+    // Cached reflected InputMethodManager.getInputMethodWindowVisibleHeight() (greylisted).
+    private var imeHeightMethod: java.lang.reflect.Method? = null
+    private var imeHeightResolved = false
+    // Last ime() inset the window dispatched (fallback signal; under-reports the strip).
+    private var imeInsetLast = 0
+
+    /**
+     * True visible height (px) of the on-screen input window INCLUDING the Supernote
+     * handwriting candidate/autocomplete strip, via the hidden
+     * InputMethodManager.getInputMethodWindowVisibleHeight(). The public ime() inset
+     * under-reports this by the strip height (window frame vs inset: ~990 vs 815 px on
+     * Manta). Greylisted but reachable because hidden_api_policy=0 on Supernote — the
+     * same unlock the EPD reflection needs (see eink/RattaEink). Returns -1 when the
+     * method is missing so callers fall back to the ime() inset + reserve.
+     */
+    private fun imeWindowVisibleHeight(): Int {
+        if (!imeHeightResolved) {
+            imeHeightResolved = true
+            imeHeightMethod = try {
+                InputMethodManager::class.java.getMethod("getInputMethodWindowVisibleHeight")
+            } catch (e: Throwable) {
+                Log.w(TAG, "[eink-ime] getInputMethodWindowVisibleHeight unavailable: $e"); null
+            }
+        }
+        val m = imeHeightMethod ?: return -1
+        return try {
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            (m.invoke(imm) as? Int) ?: -1
+        } catch (e: Throwable) { -1 }
+    }
+
+    /**
+     * Poll the true IME height while the address field is focused: the candidate strip
+     * appears/grows after the keyboard shows WITHOUT firing an inset event, so a single
+     * inset-driven read would miss it. Cheap — liftChromeForIme no-ops when unchanged.
+     */
+    private val imePoll = object : Runnable {
+        override fun run() {
+            applyImeLift()
+            if (::urlField.isInitialized && urlField.hasFocus()) ui.postDelayed(this, 200)
+        }
+    }
+
+    /**
+     * Choose the lift: prefer the hidden true-height API (covers the candidate strip
+     * exactly); fall back to the ime() inset + a fixed reserve if reflection is missing.
+     */
+    private fun applyImeLift() {
+        val focused = ::urlField.isInitialized && urlField.hasFocus()
+        if (!focused) { liftChromeForIme(0); return }
+        val trueH = imeWindowVisibleHeight()
+        val lift = when {
+            trueH > 0 -> trueH
+            imeInsetLast > 0 -> imeInsetLast + IME_CANDIDATE_RESERVE
+            else -> 0
+        }
+        liftChromeForIme(lift)
+    }
+
+    /** Sets the bottom-edge chrome bar's lift to exactly [px] (0 = flush). No-op when
+     *  chrome is top-anchored (IME can't cover it there). */
+    private fun liftChromeForIme(px: Int) {
         if (!chromeAtBottom || !::chromeBar.isInitialized) return
         val lp = chromeBar.layoutParams as? FrameLayout.LayoutParams ?: return
-        if (lp.bottomMargin == imeBottomPx) return
-        lp.bottomMargin = imeBottomPx
+        if (lp.bottomMargin == px) return
+        lp.bottomMargin = px
         chromeBar.layoutParams = lp
     }
 
@@ -579,6 +697,66 @@ class MainActivity : Activity() {
                 backBtn.visibility = if (value) View.VISIBLE else View.GONE
             }
         }
+
+        // A failed load (DNS failure, timeout, offline, refused connection…) otherwise
+        // leaves the last page — or a blank about:blank — on screen with no feedback,
+        // which on e-ink (no spinner, no chrome by default) looks like nothing happened.
+        // Render a plain, high-contrast error page so the user knows the load failed and
+        // why. Returning a data: URI tells Gecko to display it in place of the error.
+        override fun onLoadError(
+            s: GeckoSession,
+            uri: String?,
+            error: org.mozilla.geckoview.WebRequestError,
+        ): GeckoResult<String>? = GeckoResult.fromValue(buildErrorPage(uri, error))
+    }
+
+    /** Maps a Gecko load error to a short, plain-language reason for the error page. */
+    private fun errorReason(error: org.mozilla.geckoview.WebRequestError): String = when (error.code) {
+        org.mozilla.geckoview.WebRequestError.ERROR_UNKNOWN_HOST ->
+            "Couldn’t find that site. Check the address, or your Wi-Fi / DNS."
+        org.mozilla.geckoview.WebRequestError.ERROR_NET_TIMEOUT ->
+            "The site took too long to respond. Check your connection and try again."
+        org.mozilla.geckoview.WebRequestError.ERROR_CONNECTION_REFUSED ->
+            "The site refused the connection."
+        org.mozilla.geckoview.WebRequestError.ERROR_NET_INTERRUPT ->
+            "The connection was interrupted before the page finished loading."
+        org.mozilla.geckoview.WebRequestError.ERROR_OFFLINE ->
+            "You appear to be offline. Check your Wi-Fi."
+        org.mozilla.geckoview.WebRequestError.ERROR_MALFORMED_URI ->
+            "That address doesn’t look valid."
+        org.mozilla.geckoview.WebRequestError.ERROR_UNKNOWN_PROTOCOL ->
+            "That address uses a protocol this browser can’t open."
+        else -> "The page couldn’t be loaded."
+    }
+
+    /** Builds a flat, grayscale error page (data: URI) tuned for e-ink readability. */
+    private fun buildErrorPage(uri: String?, error: org.mozilla.geckoview.WebRequestError): String {
+        val host = try { java.net.URI(uri ?: "").host ?: uri ?: "" } catch (e: Throwable) { uri ?: "" }
+        val safeHost = host.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        val reason = errorReason(error)
+        val html = """
+            <!doctype html><html><head><meta charset="utf-8">
+            <meta name="viewport" content="width=device-width,initial-scale=1">
+            <style>
+              html,body{margin:0;background:#fff;color:#000;
+                font-family:serif;-webkit-text-size-adjust:100%;}
+              .wrap{max-width:38rem;margin:0 auto;padding:12vh 8vw;}
+              h1{font-size:2rem;font-weight:700;margin:0 0 .6rem;}
+              p{font-size:1.25rem;line-height:1.5;margin:0 0 1rem;}
+              .host{font-family:monospace;font-size:1.1rem;word-break:break-all;
+                border-top:2px solid #000;border-bottom:2px solid #000;padding:.6rem 0;}
+              .hint{font-size:1.05rem;color:#000;}
+            </style></head><body><div class="wrap">
+              <h1>Page didn’t load</h1>
+              <p>$reason</p>
+              <p class="host">$safeHost</p>
+              <p class="hint">Tap the address bar to try again, or reload with ⟳.</p>
+            </div></body></html>
+        """.trimIndent()
+        val b64 = android.util.Base64.encodeToString(
+            html.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP,
+        )
+        return "data:text/html;base64,$b64"
     }
 
     private fun buildSettingsPanel(): LinearLayout {
