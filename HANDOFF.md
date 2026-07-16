@@ -69,6 +69,14 @@ rules, DNS diagnosis. **Read it first for any future Supernote work.**
   chrome. (Small change: `urlField.requestFocus()` + showSoftInput in the reveal path —
   but consider that the user may reveal chrome just to hit Back/⟳, so maybe only
   auto-focus on a dedicated "address" affordance, not every reveal.)
+- **Credentials / password managers (NEW backlog):** stance = store nothing. Preferred
+  path is a **WebExtension password manager** (Bitwarden) since Supernote has no
+  configured autofill + no GMS (measured: `autofill_service` empty). **Blocker:** Distesa
+  has no `browserAction`/popup surface, so an extension can't expose its unlock/pick UI —
+  need a way to invoke extension popups. Also viable: native autofill IF user installs +
+  selects a provider; passkeys/WebAuthn as the modern target. Full write-up in
+  **`SECURITY.md`** (repo root), incl. the app-surface hardening checklist that folds in
+  the session-(a) deferred security items.
 - Deferred opt batch #2 and deferred security items from session (a) still stand (below).
 
 ---
