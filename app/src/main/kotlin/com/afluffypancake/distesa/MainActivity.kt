@@ -568,6 +568,10 @@ class MainActivity : Activity() {
         // element (persisted per-site). Kills inline JS players / furniture that
         // has no src for a network/embed rule to match.
         panel.addView(makeButton("⬡ Zap element (hide)") { onArmZap() })
+        // Undo / reset — a mis-tapped zap otherwise hides part of a site permanently
+        // with no recovery. Undo pops the last zap for this host; reset clears them all.
+        panel.addView(makeButton("↺ Undo last zap") { postToExtension("undoZap") })
+        panel.addView(makeButton("Reset zaps (this site)") { postToExtension("resetZaps") })
         // Everything else moved to the dedicated page.
         panel.addView(makeButton("More settings…") {
             settingsPanel.visibility = View.GONE
@@ -795,6 +799,21 @@ class MainActivity : Activity() {
             port.postMessage(org.json.JSONObject().put("type", "armZap"))
         } catch (e: Throwable) {
             Log.w(TAG, "armZap post threw ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    /** Post a simple {type:...} message to the eink content script (undo/reset zaps, etc.). */
+    private fun postToExtension(type: String) {
+        val port = einkPort
+        if (port == null) {
+            Log.w(TAG, "$type: no eink port yet")
+            return
+        }
+        settingsPanel.visibility = View.GONE
+        try {
+            port.postMessage(org.json.JSONObject().put("type", type))
+        } catch (e: Throwable) {
+            Log.w(TAG, "$type post threw ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 

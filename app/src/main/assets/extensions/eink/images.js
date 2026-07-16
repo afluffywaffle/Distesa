@@ -534,6 +534,8 @@
                 else if (msg.type === "collapseToggle") setCollapsed(!collapsed);
                 else if (msg.type === "setCollapsed" && typeof msg.value === "boolean") setCollapsed(msg.value);
                 else if (msg.type === "armZap") armZap();
+                else if (msg.type === "undoZap") undoZap();
+                else if (msg.type === "resetZaps") resetZaps();
                 else if (msg.type === "allowed" && msg.urls) onAllowed(msg.urls);
                 else if (msg.type === "settings") {
                     if (typeof msg.animOff === "boolean") {
@@ -676,6 +678,27 @@
             try { browser.storage.local.set(o); } catch (e) {}
         }
         log("zapped " + sel);
+    }
+
+    // Remove the most recent zap for this host. Un-hiding is a reload: applyHides
+    // only ever sets display:none, so re-rendering with the shortened list restores
+    // whatever the last selector had hidden without tracking original styles.
+    function undoZap() {
+        if (!hideSelectors.length) { log("undoZap: nothing to undo"); return; }
+        var removed = hideSelectors.pop();
+        var o = {}; o[HIDE_KEY] = hideSelectors;
+        try { browser.storage.local.set(o); } catch (e) {}
+        log("un-zapped " + removed + " (" + hideSelectors.length + " left)");
+        location.reload();
+    }
+
+    // Clear every zap for this host.
+    function resetZaps() {
+        if (!hideSelectors.length) { log("resetZaps: none for this host"); return; }
+        hideSelectors = [];
+        try { browser.storage.local.remove(HIDE_KEY); } catch (e) {}
+        log("reset all zaps for " + HOST);
+        location.reload();
     }
 
     function armZap() {
