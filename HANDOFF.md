@@ -5,7 +5,48 @@ Threads: `phase1` (Distesa Phase-1 UI/media/settings + naming)
 ---
 
 ## Thread: phase1
-_Updated 2026-07-15 (session b)_
+_Updated 2026-07-16 (session c)_
+
+### Session 2026-07-16 (c): security hardening + address-bar sliver nav
+
+Shipped in one bundle (committed + pushed to `main`, `a69cab3`). All compiles; **none
+verified on-device yet.**
+
+**Security (SECURITY.md engine-surface items, all three ticked):**
+1. **`DenyPermissionDelegate`** on the session — geo/cam/mic/notifications denied by
+   default; media + Android permission requests rejected. (`MainActivity.kt`)
+2. **HTTPS-only** — runtime built with `allowInsecureConnections(HTTPS_ONLY)`; Gecko
+   shows its interstitial on plaintext instead of a silent http load. User can proceed
+   per-site.
+3. **Explicit Safe Browsing** — `setSafeBrowsing(DEFAULT)` set unconditionally in
+   `applyTrackingProtection` so an ETP refactor can't drop malware/phishing blocking.
+
+**Navigation / UI:**
+4. **Auto-focus on reveal** — tapping the chrome sliver reveals the toolbar AND focuses
+   the address field (`selectAll` so the first keystroke replaces the URL). Explicit
+   taps only, never the idle-timer reveal. Setting **"Focus address bar on open"**
+   (default on).
+5. **Chrome sliver glyph → `⌕`** (magnifier) — reads as "type an address" now that the
+   sliver is effectively the address button.
+6. **Back / Refresh sliver slots** — edge slivers cycle ⌕ Address / ⊟ Collapse / ‹ Back
+   / ⟳ Refresh / None, so a button-heavy user navigates without opening chrome.
+7. **Fix:** `edgeSlot*` were missing from the `onResume` structural-change signature, so
+   a slot change didn't rebuild the strips until app restart — now `recreate()`s live.
+
+**⚠️ ON-DEVICE VERIFICATION PENDING (do first next session, ideally Nomad — bottom chrome):**
+- **`⌕` renders** in the Supernote system font (BMP glyph, should be fine; easy swap in
+  `ADDRESS_GLYPH` const if not).
+- **Auto-focus feels right** on the Nomad: tap ⌕ sliver → toolbar reveals → keyboard up →
+  bar lifts above it (the `liftChromeForIme` path). Confirm no jarring double-flash.
+- **HTTPS-only interstitial** — hit a known http-only page, confirm the interstitial
+  shows and "proceed" works (this is the one item with a visible behavior change).
+- Also sanity-check Back/Refresh sliver slots actually go back / reload when configured.
+
+**Still open (unchanged from session b):** consent dialog + `extensionsWebAPIEnabled`
+(coupled, bigger lift), cert-error interstitial UI, release signing + R8/minify,
+exported-components audit (quick), page-flip distance calibration, domain/title bar.
+
+---
 
 **Project:** Distesa — minimal e-ink web browser for Supernote Nomad/Manta (GeckoView).
 Formerly "Achroma". Local path `~/Develop/Distesa` (folder renamed 2026-07-16). Public repo:
