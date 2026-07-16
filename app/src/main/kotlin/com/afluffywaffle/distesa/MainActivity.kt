@@ -84,6 +84,9 @@ class MainActivity : Activity() {
     private var searchEngine = "DuckDuckGo"
     private var leftStrip: EdgeNavView? = null
     private var rightStrip: EdgeNavView? = null
+    // Bottom-of-strip sliver buttons (☰/⊟), tracked so they can be hidden with the
+    // strips while the IME is up (the chevrons/slivers look out of place over the keyboard).
+    private val sliverButtons = mutableListOf<Button>()
 
     // Edge-sliver action slots: a small button at the bottom of each nav strip,
     // ALWAYS drawn (independent of showZones) so there is always a way to surface
@@ -256,6 +259,7 @@ class MainActivity : Activity() {
     private fun addStrips(root: FrameLayout, stripW: Int) {
         leftStrip = null
         rightStrip = null
+        sliverButtons.clear()
         if (navPlacement != "right") {
             leftStrip = addStrip(root, stripW, Gravity.START, edgeSlotLeft)
         }
@@ -281,7 +285,11 @@ class MainActivity : Activity() {
                 if (hasSliver) bottomMargin = sliverPx // keep paging taps off the sliver
             },
         )
-        if (hasSliver) root.addView(makeSliverButton(slot), FrameLayout.LayoutParams(stripW, sliverPx, Gravity.BOTTOM or side))
+        if (hasSliver) {
+            val sliver = makeSliverButton(slot)
+            root.addView(sliver, FrameLayout.LayoutParams(stripW, sliverPx, Gravity.BOTTOM or side))
+            sliverButtons.add(sliver)
+        }
         return strip
     }
 
@@ -400,6 +408,7 @@ class MainActivity : Activity() {
                 } else {
                     ui.removeCallbacks(imePoll)
                     liftChromeForIme(0)
+                    setEdgeNavHidden(false) // restore the edge strips/slivers the IME hid
                     scheduleAutoHide()
                 }
             }
@@ -527,6 +536,10 @@ class MainActivity : Activity() {
      */
     private fun applyImeLift() {
         val focused = ::urlField.isInitialized && urlField.hasFocus()
+        // Hide the edge paging strips + slivers while the address field is focused:
+        // the chevrons/slivers hovering over the keyboard read as out of place. Restored
+        // when focus clears (dismiss / hideChrome), which is also when the IME goes away.
+        setEdgeNavHidden(focused)
         if (!focused) { liftChromeForIme(0); return }
         val trueH = imeWindowVisibleHeight()
         val lift = when {
@@ -535,6 +548,15 @@ class MainActivity : Activity() {
             else -> 0
         }
         liftChromeForIme(lift)
+    }
+
+    /** Hide (GONE) or restore the edge paging strips and their sliver buttons. Used to
+     *  clear them out of the way while the IME is up. Idempotent. */
+    private fun setEdgeNavHidden(hidden: Boolean) {
+        val vis = if (hidden) View.GONE else View.VISIBLE
+        leftStrip?.let { if (it.visibility != vis) it.visibility = vis }
+        rightStrip?.let { if (it.visibility != vis) it.visibility = vis }
+        for (b in sliverButtons) if (b.visibility != vis) b.visibility = vis
     }
 
     /** Small resting gap (px) between the pane and its anchored screen edge so its

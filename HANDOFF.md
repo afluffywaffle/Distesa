@@ -65,6 +65,11 @@ rules, DNS diagnosis. **Read it first for any future Supernote work.**
   25% overlap band) so the reader keeps context between flips. Needs on-device testing;
   likely wants a **user adjustment setting** (overlap %). Applies to the native
   EdgeNavView paging (see `EdgeNavView.kt` + the flip handler in `MainActivity.kt`).
+- **Hide edge nav bars while IME is up (DONE 2026-07-16):** the `EdgeNavView` paging
+  strips + corner slivers now go `GONE` while the address field is focused and restore on
+  blur, driven off the same focus signal as `liftChromeForIme` (`setEdgeNavHidden` in
+  `MainActivity.kt`, hooked in `applyImeLift` + the focus-change blur branch). Verified
+  on Nomad: chevrons/slivers vanish on focus, return on blur.
 - **Domain/title bar (NEW backlog):** a thin bar showing the current site's name/URL
   (domain) so the user knows where they are. Open Q: persistently pinned on top, or
   attached to / revealed with the address bar? Decide the anchoring before building.
