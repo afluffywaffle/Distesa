@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RectF
 import android.util.TypedValue
 import android.view.MotionEvent
 import android.view.View
@@ -22,14 +23,27 @@ import android.view.View
  *  - ALWAYS flips and consumes the tap, so a tap over a link (overlay mode) turns
  *    the page instead of opening the link (native interception = the same effect
  *    as a capture-phase preventDefault, but more reliable).
- *  - Affordance: faint LIGHT chevrons (never dark) placed low — up = prev,
- *    down = next. [showZones] hides them while keeping the zones live.
+ *  - Affordance: the whole thing is drawn as ONE continuous rounded CAPSULE outline
+ *    spanning the paging zone AND the bottom sliver cap ([capReservePx]) — so the
+ *    sliver button reads as part of the rail, not an addition bolted onto it. The
+ *    internal boundaries (prev/next split, and paging/sliver) are short CENTRED
+ *    hairlines that float open-ended inside the capsule, never touching its walls.
+ *    Chevrons sit in the paging halves: up = prev, down = next. [showZones] hides the
+ *    whole capsule while keeping the zones live. The inert upper margin sits ABOVE the
+ *    capsule so it's clearly not part of the control (nor page-render space).
+ *
+ * The sliver icon itself is drawn by the host's overlay button; this view only draws
+ * the capsule, dividers, and chevrons behind it.
  *
  * E-ink: static vector strokes, no animation.
+ *
+ * @param capReservePx height (px) reserved at the BOTTOM for the sliver cap, 0 if the
+ *   strip has no sliver (then the capsule bottom is just the paging zone).
  */
 class EdgeNavView(
     context: Context,
     var showZones: Boolean = true,
+    private val capReservePx: Int = 0,
     private val onNext: (() -> Unit)? = null,
     private val onPrev: (() -> Unit)? = null,
 ) : View(context) {
@@ -38,15 +52,27 @@ class EdgeNavView(
     private val chevH = dp(13f)
     private val path = Path()
 
-    // Faint LIGHT chevrons — subtle grey, never dark, so they read as a quiet hint
-    // on the white e-ink page / light margin.
+    // Chevrons — mid grey, never black. Inside the capsule they read as directional
+    // controls, so a touch stronger than the old hint-grey to look deliberate.
     private val chevronPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(150, 150, 150)
+        color = Color.rgb(120, 120, 120)
         style = Paint.Style.STROKE
         strokeWidth = dp(2.5f)
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
+
+    // The capsule + dividers: a faint light-grey hairline — never a filled box (a fill
+    // reads as a grey halo on e-ink); the outline alone says "control lives here".
+    private val railPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(200, 200, 200)
+        style = Paint.Style.STROKE
+        strokeWidth = dp(1.5f)
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val railRect = RectF()
+    private val railInsetX = dp(5f)
+    private val railRadius = dp(12f)
 
     private var downX = 0f
     private var downY = 0f
@@ -61,8 +87,33 @@ class EdgeNavView(
         val w = width.toFloat()
         val h = height.toFloat()
         val cx = w / 2f
-        drawChevron(canvas, cx, h * 0.55f, down = false) // prev (upper of active zone)
-        drawChevron(canvas, cx, h * 0.85f, down = true)  // next (very bottom)
+        val half = railPaint.strokeWidth / 2f
+
+        val railTop = ACTIVE_TOP * h
+        val pagingBottom = h - capReservePx // where the sliver cap begins (or h if none)
+
+        // One continuous capsule — all four corners rounded — from the top of the active
+        // zone down through the sliver cap.
+        railRect.set(railInsetX, railTop + half, w - railInsetX, h - half)
+        canvas.drawRoundRect(railRect, railRadius, railRadius, railPaint)
+
+        // prev/next split: a short centred hairline floating inside the paging zone.
+        val splitY = railTop + (pagingBottom - railTop) * SPLIT_FRAC
+        drawDivider(canvas, cx, splitY)
+
+        drawChevron(canvas, cx, railTop + (splitY - railTop) / 2f, down = false) // prev
+        drawChevron(canvas, cx, splitY + (pagingBottom - splitY) / 2f, down = true) // next
+
+        if (capReservePx > 0) {
+            // paging/sliver boundary: another floating centred hairline, open-ended.
+            drawDivider(canvas, cx, pagingBottom)
+        }
+    }
+
+    /** A short, centred, open-ended hairline (never reaches the capsule walls). */
+    private fun drawDivider(canvas: Canvas, cx: Float, y: Float) {
+        val halfLen = (width - 2f * railInsetX) * DIVIDER_FRAC / 2f
+        canvas.drawLine(cx - halfLen, y, cx + halfLen, y, railPaint)
     }
 
     private fun drawChevron(canvas: Canvas, cx: Float, cy: Float, down: Boolean) {
@@ -80,9 +131,14 @@ class EdgeNavView(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (onNext == null && onPrev == null) return false
         val h = height.toFloat()
+        val railTop = ACTIVE_TOP * h
+        val pagingBottom = h - capReservePx
+        val splitY = railTop + (pagingBottom - railTop) * SPLIT_FRAC
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                if (event.y < ACTIVE_TOP * h) return false // upper 40% falls through to page
+                // Inert above the paging zone (falls through to the page) and below it
+                // (the sliver overlay button handles that region).
+                if (event.y < railTop || event.y >= pagingBottom) return false
                 downX = event.x
                 downY = event.y
                 return true
@@ -91,7 +147,7 @@ class EdgeNavView(
                 val dx = event.x - downX
                 val dy = event.y - downY
                 if (dx * dx + dy * dy > tapSlop * tapSlop) return true // a swipe — ignore
-                if (event.y >= SPLIT * h) onNext?.invoke() else onPrev?.invoke()
+                if (event.y >= splitY) onNext?.invoke() else onPrev?.invoke()
                 return true
             }
         }
@@ -105,7 +161,10 @@ class EdgeNavView(
         /** Above this fraction of height the strip is inactive (taps fall through). */
         const val ACTIVE_TOP = 0.40f
 
-        /** Active zone split: below = NEXT (bottom), above = PREV. */
-        const val SPLIT = 0.70f
+        /** Where the paging zone splits: below = NEXT, above = PREV (fraction of zone). */
+        const val SPLIT_FRAC = 0.5f
+
+        /** Divider hairline length as a fraction of the capsule's inner width. */
+        const val DIVIDER_FRAC = 0.5f
     }
 }

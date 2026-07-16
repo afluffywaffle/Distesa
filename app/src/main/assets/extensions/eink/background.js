@@ -230,11 +230,18 @@ try {
 
 var nativePort = null;
 var imgPorts = new Set();
+// Self-heal counters: the background page is a process-wide singleton that
+// outlives an activity recreate() on the app side, so the native port can be
+// force-dropped out from under us (or just die). Reconnect with a short
+// retry, capped so a persistently-failing connectNative can't spin forever.
+var nativePortReconnectFailures = 0;
+var NATIVE_PORT_MAX_RECONNECT_FAILURES = 5;
 
 function openNativePort() {
     try {
         nativePort = browser.runtime.connectNative(NATIVE_APP);
         nativePort.onMessage.addListener(function (msg) {
+            nativePortReconnectFailures = 0;
             // Font-block is a webRequest concern owned by THIS background page.
             if (msg && msg.type === "settings" && typeof msg.blockFonts === "boolean") {
                 blockFonts = msg.blockFonts;
@@ -245,7 +252,18 @@ function openNativePort() {
                 try { p.postMessage(msg); } catch (e) { log("fanout failed: " + e); }
             });
         });
-        nativePort.onDisconnect.addListener(function () { nativePort = null; });
+        nativePort.onDisconnect.addListener(function () {
+            nativePort = null;
+            // Reconnect so a dropped native port (including a forced drop from
+            // the app after activity recreate()) comes back without requiring
+            // a full app restart.
+            if (nativePortReconnectFailures < NATIVE_PORT_MAX_RECONNECT_FAILURES) {
+                nativePortReconnectFailures++;
+                setTimeout(function () { if (!nativePort) openNativePort(); }, 400);
+            } else {
+                log("native port reconnect gave up after " + nativePortReconnectFailures + " failures");
+            }
+        });
         log("native port opened");
     } catch (e) {
         log("connectNative failed: " + e);
@@ -267,6 +285,9 @@ browser.runtime.onMessage.addListener(function (msg) {
 
 // images.js port <-> native + allowlist control.
 browser.runtime.onConnect.addListener(function (port) {
+    // Belt-and-suspenders: a page load after the background page lost its
+    // native port (and gave up reconnecting) gets one more chance to re-open it.
+    if (!nativePort) openNativePort();
     imgPorts.add(port);
     var tabId = (port.sender && port.sender.tab) ? port.sender.tab.id : -1;
     var pageUrl = (port.sender && port.sender.url) ? port.sender.url : "";

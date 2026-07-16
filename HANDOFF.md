@@ -5,7 +5,46 @@ Threads: `phase1` (Distesa Phase-1 UI/media/settings + naming)
 ---
 
 ## Thread: phase1
-_Updated 2026-07-16 (session c)_
+_Updated 2026-07-16 (session d)_
+
+### Session 2026-07-16 (d): edge-nav capsule redesign + lockout fix — UNCOMMITTED
+
+On-device on the **Nomad** (`SN078C10005528`; also Tailscale `100.67.164.61:5555`,
+hidden_api_policy already 0). Fresh build installed. **Changes are on disk, NOT
+committed** — decide whether to commit the bundle.
+
+Done & verified on-device (screenshots):
+1. **Edge nav → one continuous capsule.** `EdgeNavView` now draws a single rounded
+   outline spanning the paging zone AND the bottom sliver cap (new `capReservePx`
+   ctor param = sliver height). Internal boundaries (prev/next split + paging/sliver)
+   are short CENTRED open-ended hairlines (`DIVIDER_FRAC`), never touching the walls.
+   Old per-corner "two boxes butting" approach removed. Matches the user's PPT mockup.
+   The sliver Button lost its own outline (transparent) — it's just icon + click over
+   the cap; the capsule/divider are drawn by the strip behind it.
+2. **Address sliver icon is DRAWN, not a glyph** — new `eink/GlobeSearchDrawable.kt`:
+   a globe (circle+meridian+equator) with a magnifier laid diagonally OVER it and a
+   white "moat" knocking out the globe lines under the lens (reads as in-front). Set as
+   the chrome sliver's centred `foreground`. Renders crisp on-device. (Old `⌕` /
+   `⊕⌕` glyph + `ADDRESS_GLYPH` const removed.)
+3. **Sliver aligned to address row** — sliver lifted by `CHROME_EDGE_GAP` (bottomMargin)
+   so its bottom shares the chrome pane's row (only visible when chrome shown w/o IME).
+4. **Lockout guard fix** — the guard forcing a chrome sliver now evaluates against
+   ENABLED rails only (`navPlacement`): a chrome slot on a rail turned OFF is invisible
+   and locked the user out of settings. Now if no ACTIVE rail is chrome, force one that
+   is. This was a live soft-lock (left rail off + right="collapse"); fix unlocked it.
+
+**Open tweaks the user parked ("hold for later"):**
+- Divider hairline length (currently `DIVIDER_FRAC=0.5` of inner width) — tune to taste.
+- Guard currently overrides the stored slot at LOAD only, doesn't rewrite the saved
+  pref — so re-enabling the left rail reverts the right to its saved "collapse". User
+  may want the forced-chrome to PERSIST instead. (Decide + optionally write pref.)
+- Then: commit the whole bundle (capsule + drawn icon + alignment + guard fix).
+
+Files touched (uncommitted): `eink/EdgeNavView.kt` (rewritten), `eink/GlobeSearchDrawable.kt`
+(new), `MainActivity.kt` (addStrip capReserve/span, makeSliverButton drawn icon +
+transparent bg, sliver bottomMargin align, load-time guard rewrite, imports).
+
+---
 
 ### Session 2026-07-16 (c): security hardening + address-bar sliver nav
 
@@ -106,6 +145,20 @@ rules, DNS diagnosis. **Read it first for any future Supernote work.**
   25% overlap band) so the reader keeps context between flips. Needs on-device testing;
   likely wants a **user adjustment setting** (overlap %). Applies to the native
   EdgeNavView paging (see `EdgeNavView.kt` + the flip handler in `MainActivity.kt`).
+- **E-ink tap feedback on nav strip (NEW backlog — Sonnet-sized):** the strip gives NO
+  acknowledgement that a tap registered, which made the recreate/`einkPort` lockout bug
+  (fixed 2026-07-16) very hard to notice. Want an e-ink-friendly "highlight": on
+  ACTION_DOWN in an active zone, briefly draw a stronger OUTLINE around the tapped nav
+  button (the prev/next chevron half of the capsule), then clear it. Must be a single
+  static stroke (no animation/fade — e-ink), e.g. thicken/darken that half's border for
+  one partial refresh. Implement in `EdgeNavView` (it already tracks down/up + zones and
+  draws the capsule); trigger a targeted `invalidate()` on down, clear on up/after a short
+  post. Keep it subtle — a momentary heavier outline, not a fill (fills ghost on EPD).
+- **Globe sliver icon needs a white outline (NEW backlog — Sonnet-sized):** the globe glyph
+  in `GlobeSearchDrawable.kt` has NO white halo/outline, so on dark page backgrounds it
+  disappears. The magnifier part already carries a white outline and stays visible — give
+  the globe the same white stroke/halo underneath so it reads on any background. Match the
+  magnifier's outline treatment in the same drawable.
 - **Hide edge nav bars while IME is up (DONE 2026-07-16):** the `EdgeNavView` paging
   strips + corner slivers now go `GONE` while the address field is focused and restore on
   blur, driven off the same focus signal as `liftChromeForIme` (`setEdgeNavHidden` in

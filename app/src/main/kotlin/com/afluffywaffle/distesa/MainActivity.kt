@@ -34,6 +34,7 @@ import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.WebExtensionController
 import com.afluffywaffle.distesa.eink.Epd
+import com.afluffywaffle.distesa.eink.GlobeSearchDrawable
 
 /**
  * Distesa Phase 0 Spike A — the GeckoView engine evaluation.
@@ -136,9 +137,6 @@ class MainActivity : Activity() {
     /** The installed uBlock Origin add-on, once resolved (install or list). */
     private var ublock: WebExtension? = null
 
-    /** Live port to the eink content script (images.js), for the image-policy cycle. */
-    private var einkPort: WebExtension.Port? = null
-
     /**
      * Native EPD refresh driver for the GeckoView surface. On each page flip the
      * eink extension signals us; [Epd] counts turns and forces a clean full-panel
@@ -157,6 +155,18 @@ class MainActivity : Activity() {
         window.setDecorFitsSystemWindows(false)
 
         loadSettings()
+
+        // The GeckoRuntime + extension + background page are process-wide and
+        // survive activity recreate() (e.g. from a settings toggle that calls
+        // recreate()). A port left over from a prior activity instance is now
+        // dead weight — force it closed so background.js's onDisconnect fires
+        // and it self-heals with a fresh connectNative bound to THIS activity.
+        try {
+            einkPort?.disconnect()
+        } catch (e: Throwable) {
+            Log.w(TAG, "stale einkPort disconnect threw ${e.javaClass.simpleName}: ${e.message}")
+        }
+        einkPort = null
 
         val runtime = sharedRuntime(this)
         // Auto-approve add-on install + permission prompts (test spike only).
@@ -286,16 +296,33 @@ class MainActivity : Activity() {
     private fun addStrip(root: FrameLayout, stripW: Int, side: Int, slot: String): EdgeNavView {
         val hasSliver = slot != "none"
         val sliverPx = dp(SLIVER_H)
-        val strip = EdgeNavView(this, showZones, onNext = { flipPage("next") }, onPrev = { flipPage("prev") })
+        // Lift the sliver off the bottom edge by the same gap the chrome pane rests at,
+        // so the sliver glyph shares the address-bar's row when the bar is revealed
+        // (bottoms align; the pane is inset horizontally to sit between the strips).
+        val sliverGap = if (chromeAtBottom) CHROME_EDGE_GAP else 0
+        // The strip now spans DOWN OVER the sliver region (bottomMargin = just the gap)
+        // and draws the sliver cap as part of one continuous capsule; it reserves the
+        // bottom sliverPx (capReservePx) for the cap and keeps paging taps above it. The
+        // sliver overlay button sits on top of that cap for the icon + click.
+        val strip = EdgeNavView(
+            this, showZones,
+            capReservePx = if (hasSliver) sliverPx else 0,
+            onNext = { flipPage("next") }, onPrev = { flipPage("prev") },
+        )
         root.addView(
             strip,
             FrameLayout.LayoutParams(stripW, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.BOTTOM or side).apply {
-                if (hasSliver) bottomMargin = sliverPx // keep paging taps off the sliver
+                bottomMargin = sliverGap
             },
         )
         if (hasSliver) {
             val sliver = makeSliverButton(slot)
-            root.addView(sliver, FrameLayout.LayoutParams(stripW, sliverPx, Gravity.BOTTOM or side))
+            root.addView(
+                sliver,
+                FrameLayout.LayoutParams(stripW, sliverPx, Gravity.BOTTOM or side).apply {
+                    bottomMargin = sliverGap
+                },
+            )
             sliverButtons.add(sliver)
         }
         return strip
@@ -307,14 +334,25 @@ class MainActivity : Activity() {
             "collapse" -> if (imagesCollapsed) "⊞" else "⊟"
             "back" -> "‹"
             "refresh" -> "⟳"
-            else -> ADDRESS_GLYPH // chrome — reads as an address/search affordance
+            else -> "" // chrome uses a drawn globe+magnifier icon, not a glyph
         }
         return Button(this).apply {
             text = glyph
-            setTextColor(Color.rgb(150, 150, 150)) // faint light ink, matches chevrons
+            setTextColor(Color.rgb(120, 120, 120)) // matches the chevrons/rail ink
+            // No background of its own: the continuous capsule outline (and the floating
+            // divider above this cap) is drawn by the EdgeNavView behind it. This button
+            // is just the icon + click sitting in the capsule's bottom cap.
             setBackgroundColor(Color.TRANSPARENT)
             setPadding(0, 0, 0, 0)
             textSize = 20f
+            // The chrome/address sliver reveals AND focuses the address bar — both "web
+            // address" and "search". A drawn globe-with-magnifier says both; a font glyph
+            // can't overlap the two, so use a centred foreground Drawable. Sized to sit in
+            // the sliver like the text glyphs (~dp26), same faint grey as the chevrons.
+            if (slot != "collapse" && slot != "back" && slot != "refresh") {
+                foreground = GlobeSearchDrawable(Color.rgb(120, 120, 120), 0xFFFAFAFA.toInt(), dp(26))
+                foregroundGravity = Gravity.CENTER
+            }
             setOnClickListener {
                 when (slot) {
                     "collapse" -> { onToggleCollapse(); text = if (imagesCollapsed) "⊞" else "⊟" }
@@ -328,7 +366,10 @@ class MainActivity : Activity() {
 
     /** Native strip tap → tell content.js to scroll a page (it also signals EPD). */
     private fun flipPage(dir: String) {
-        val p = einkPort ?: return
+        val p = einkPort ?: run {
+            Log.w(TAG, "flipPage: no eink port — dropped $dir")
+            return
+        }
         try {
             p.postMessage(org.json.JSONObject().put("type", "navFlip").put("dir", dir))
         } catch (e: Throwable) {
@@ -679,9 +720,17 @@ class MainActivity : Activity() {
         edgeSlotRight = prefs.getString("edgeSlotRight", "collapse") ?: "collapse"
         autoFocusOnReveal = prefs.getBoolean("autoFocusOnReveal", true)
         // Lockout guard: with tap-to-dismiss and the centre reveal-strip gone, the
-        // sliver is the ONLY way to open the toolbar. If the user cleared it from
-        // both slots, force the left one back to chrome.
-        if (edgeSlotLeft != "chrome" && edgeSlotRight != "chrome") edgeSlotLeft = "chrome"
+        // sliver is the ONLY way to open the toolbar (and thus settings). Only an
+        // ENABLED rail can carry the chrome sliver — a chrome slot on a rail turned off
+        // by navPlacement is invisible and would lock the user out. So evaluate against
+        // active rails, and if no active rail is set to chrome, force one that is.
+        val leftActive = navPlacement != "right"
+        val rightActive = navPlacement != "left"
+        val chromeReachable = (leftActive && edgeSlotLeft == "chrome") ||
+            (rightActive && edgeSlotRight == "chrome")
+        if (!chromeReachable) {
+            if (leftActive) edgeSlotLeft = "chrome" else edgeSlotRight = "chrome"
+        }
         chromeAtBottom = computeChromeAtBottom()
     }
 
@@ -1281,6 +1330,16 @@ class MainActivity : Activity() {
     companion object {
         private const val TAG = "DistesaMain"
 
+        /**
+         * Live port to the eink content script (images.js / navFlip target).
+         * Process-wide (not per-activity): the GeckoRuntime + extension +
+         * background page are a process-wide singleton that survives activity
+         * recreate(), but onConnect only re-fires on a fresh connectNative from
+         * background.js — a per-activity field would go stale (null) forever
+         * after recreate() and silently drop every strip tap.
+         */
+        @Volatile internal var einkPort: WebExtension.Port? = null
+
         /** EPD full-clear cadence steps cycled by the settings button (0 = Off). */
         internal val CADENCE_STEPS = intArrayOf(0, 4, 6, 8, 10, 15)
 
@@ -1289,14 +1348,6 @@ class MainActivity : Activity() {
 
         /** Dark ink for all (light) chrome — high contrast, no colour. */
         internal const val CHROME_INK = 0xFF222222.toInt()
-
-        /**
-         * Glyph for the chrome-reveal sliver. A magnifier reads as "type an address /
-         * search" — the sliver's primary role now that a tap reveals AND focuses the
-         * address bar. (Simple BMP glyph, not an emoji, so it renders crisp in e-ink
-         * grayscale; verify on-device and swap if the device font lacks it.)
-         */
-        private const val ADDRESS_GLYPH = "⌕"
 
         /** Height (dp) of the bottom-of-strip sliver action button. */
         private const val SLIVER_H = 56
