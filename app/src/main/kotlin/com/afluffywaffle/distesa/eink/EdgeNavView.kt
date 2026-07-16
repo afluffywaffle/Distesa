@@ -62,6 +62,13 @@ class EdgeNavView(
         strokeJoin = Paint.Join.ROUND
     }
 
+    // White "moat" behind each chevron (same knock-out technique as the globe/magnifier
+    // sliver icon) so the chevron stays legible over dark page backgrounds.
+    private val chevronMoatPaint = Paint(chevronPaint).apply {
+        color = Color.WHITE
+        strokeWidth = dp(2.5f) + dp(3f) // fat enough to clear content behind the stroke
+    }
+
     // The capsule + dividers: a faint light-grey hairline — never a filled box (a fill
     // reads as a grey halo on e-ink); the outline alone says "control lives here".
     private val railPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -77,6 +84,13 @@ class EdgeNavView(
     private var downX = 0f
     private var downY = 0f
     private val tapSlop = dp(12f)
+
+    // NOTE: no transient per-tap press highlight. On this panel a physical EPD refresh
+    // is only reliably driven by an invalidate() on the GeckoView's own compositor
+    // surface (the page flip); this overlay View's own invalidate() does not reliably
+    // kick the panel, so a momentary press-and-revert flash drops out on fast taps.
+    // The static affordance below (capsule + chevrons + moat) is what marks the zones —
+    // it rides the flip's refresh for free and is always visible. See MainActivity/Epd.
 
     init {
         setLayerType(LAYER_TYPE_SOFTWARE, null)
@@ -101,8 +115,8 @@ class EdgeNavView(
         val splitY = railTop + (pagingBottom - railTop) * SPLIT_FRAC
         drawDivider(canvas, cx, splitY)
 
-        drawChevron(canvas, cx, railTop + (splitY - railTop) / 2f, down = false) // prev
-        drawChevron(canvas, cx, splitY + (pagingBottom - splitY) / 2f, down = true) // next
+        drawChevron(canvas, cx, railTop + (splitY - railTop) / 2f, down = false)
+        drawChevron(canvas, cx, splitY + (pagingBottom - splitY) / 2f, down = true)
 
         if (capReservePx > 0) {
             // paging/sliver boundary: another floating centred hairline, open-ended.
@@ -125,6 +139,9 @@ class EdgeNavView(
         } else {
             path.moveTo(cx - w, cy + h); path.lineTo(cx, cy - h); path.lineTo(cx + w, cy + h)
         }
+        // Moat first (knock-out stroke), then the chevron ink on top — keeps it legible
+        // over dark backgrounds, same technique as the sliver icon.
+        canvas.drawPath(path, chevronMoatPaint)
         canvas.drawPath(path, chevronPaint)
     }
 

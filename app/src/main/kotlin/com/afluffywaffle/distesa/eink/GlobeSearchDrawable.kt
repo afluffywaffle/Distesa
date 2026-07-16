@@ -52,11 +52,19 @@ class GlobeSearchDrawable(
         val gcx = b.left + s * 0.42f
         val gcy = b.top + s * 0.42f
         val gr = s * 0.30f
+        oval.set(gcx - gr * 0.45f, gcy - gr, gcx + gr * 0.45f, gcy + gr)
+
+        // Moat first: a fatter stroke in the moat colour so the globe reads against
+        // dark backgrounds too (same technique as the magnifier's knock-out moat).
+        canvas.drawCircle(gcx, gcy, gr, moat)
+        canvas.drawLine(gcx - gr, gcy, gcx + gr, gcy, moat)
+        canvas.drawOval(oval, moat)
+
+        // Then the globe on top.
         canvas.drawCircle(gcx, gcy, gr, ink)
         // Equator.
         canvas.drawLine(gcx - gr, gcy, gcx + gr, gcy, ink)
         // Meridian (a thin vertical ellipse through the poles).
-        oval.set(gcx - gr * 0.45f, gcy - gr, gcx + gr * 0.45f, gcy + gr)
         canvas.drawOval(oval, ink)
 
         // Magnifier, lower-right, overlapping the globe. Lens centre + diagonal handle.

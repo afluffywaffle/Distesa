@@ -24,6 +24,14 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Nomad/Manta are both arm64-v8a; unfiltered debug bundles GeckoView's
+            // native libs for every ABI (~500MB APK, slow adb install over Tailscale).
+            // Release keeps all ABIs for real distribution.
+            ndk {
+                abiFilters += "arm64-v8a"
+            }
+        }
         release {
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("debug")
