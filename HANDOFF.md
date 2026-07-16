@@ -182,8 +182,8 @@ Shipped (committed; `88c87ba` zapper, `9d57737` the rest):
   `[eink-ime]` under tag DistesaMain.
 
 ### Next session — paste this to start
-> Resume **Distesa**, thread **phase1** (repo ~/Develop/Achroma, branch `ime-input-fixes`
-> HEAD `6d76932`, unpushed). Last session fixed the address-bar input chain on the
+> Resume **Distesa**, thread **phase1** (repo ~/Develop/Achroma, tip of branch
+> `ime-input-fixes`, unpushed). Last session fixed the address-bar input chain on the
 > **Manta** (verified on-device): edge-to-edge IME insets, showSoftInput under
 > adjustNothing, robust Enter, an onLoadError e-ink error page, the hidden
 > `getInputMethodWindowVisibleHeight()` lift so the handwriting autocomplete no longer
