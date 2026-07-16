@@ -195,6 +195,25 @@
     // you'll load most of them). Toggled per-page from the native chrome; persisted.
     var collapsed = true;
 
+    // Auto-collapse. collapseMode drives the page's INITIAL display; in "auto" we
+    // start expanded (boxes) and flip to collapsed (chips) once more than
+    // collapseThreshold media elements have been gated on the page — image-heavy
+    // pages self-tidy, sparse pages stay boxed. A manual ⊞/⊟ toggle sets
+    // collapseManual and OVERRIDES auto for the rest of this page session.
+    var collapseMode = "auto";        // "always" | "never" | "auto"
+    var collapseThreshold = 6;
+    var collapseManual = false;       // user toggled -> auto stops flipping
+    var gatedCount = 0;               // running count of gated media placeholders
+
+    function maybeAutoCollapse() {
+        if (collapseMode !== "auto" || collapseManual || collapsed) return;
+        if (gatedCount > collapseThreshold) {
+            collapsed = true;
+            restyleAllPlaceholders();
+            reportCollapsed();
+        }
+    }
+
     // (Re)apply the current display mode to a placeholder. Dims + glyph + label are
     // stashed on the element so the same node can flip between chip and box live.
     function stylePlaceholder(ph) {
@@ -251,9 +270,11 @@
         } catch (e) { log("restyle failed: " + e); }
     }
 
+    // Manual per-page toggle. Overrides auto for the rest of this page session; NOT
+    // persisted (mode drives the initial state on the next load, by design).
     function setCollapsed(val) {
         collapsed = !!val;
-        try { browser.storage.local.set({ _collapsed: collapsed }); } catch (e) {}
+        collapseManual = true;
         restyleAllPlaceholders();
         reportCollapsed();
     }
@@ -265,6 +286,8 @@
     function insertPlaceholder(el, ph) {
         el.style.display = "none";
         if (el.parentNode) el.parentNode.insertBefore(ph, el);
+        gatedCount++;
+        maybeAutoCollapse();
     }
 
     function removePlaceholder(el) {
@@ -442,8 +465,18 @@
         for (var f = 0; f < frames.length; f++) gateElement(frames[f], 0);
     }
 
+    var hideScheduled = false;
+    function scheduleHides() {
+        if (hideScheduled || !hideSelectors.length) return;
+        hideScheduled = true;
+        setTimeout(function () { hideScheduled = false; applyHides(); }, 200);
+    }
+
     function startObserver() {
-        if (observer || policy === "load-all") return;
+        // Run even under load-all if the user has zapped elements here, so their
+        // hides survive late DOM injection (JS players mount after load).
+        if (observer) return;
+        if (policy === "load-all" && !hideSelectors.length) return;
         observer = new MutationObserver(function (mutations) {
             for (var m = 0; m < mutations.length; m++) {
                 var added = mutations[m].addedNodes;
@@ -452,9 +485,9 @@
                     if (node.nodeType !== 1) continue;
                     try {
                         var tag = node.tagName;
-                        if (tag === "IMG" || tag === "VIDEO" || tag === "IFRAME") {
+                        if (policy !== "load-all" && (tag === "IMG" || tag === "VIDEO" || tag === "IFRAME")) {
                             gateElement(node, 0);
-                        } else if (node.querySelectorAll) {
+                        } else if (policy !== "load-all" && node.querySelectorAll) {
                             gateAll(node);
                         }
                     } catch (e) {
@@ -462,6 +495,7 @@
                     }
                 }
             }
+            scheduleHides();
         });
         observer.observe(document.documentElement, { childList: true, subtree: true });
     }
@@ -499,11 +533,30 @@
                 if (msg.type === "cyclePolicy") cyclePolicy();
                 else if (msg.type === "collapseToggle") setCollapsed(!collapsed);
                 else if (msg.type === "setCollapsed" && typeof msg.value === "boolean") setCollapsed(msg.value);
+                else if (msg.type === "armZap") armZap();
                 else if (msg.type === "allowed" && msg.urls) onAllowed(msg.urls);
                 else if (msg.type === "settings") {
                     if (typeof msg.animOff === "boolean") {
                         applyAnimOff(msg.animOff);
                         try { browser.storage.local.set({ _animOff: msg.animOff }); } catch (e) {}
+                    }
+                    if (typeof msg.collapseThreshold === "number") {
+                        collapseThreshold = msg.collapseThreshold;
+                        try { browser.storage.local.set({ _collapseThreshold: collapseThreshold }); } catch (e) {}
+                    }
+                    if (typeof msg.collapseMode === "string" && msg.collapseMode !== collapseMode) {
+                        collapseMode = msg.collapseMode;
+                        try { browser.storage.local.set({ _collapseMode: collapseMode }); } catch (e) {}
+                        // A mode change is not a manual toggle — re-arm auto + reapply.
+                        collapseManual = false;
+                        if (collapseMode === "always") collapsed = true;
+                        else if (collapseMode === "never") collapsed = false;
+                        else collapsed = false; // auto: start expanded, let counter decide
+                        restyleAllPlaceholders();
+                        reportCollapsed();
+                        maybeAutoCollapse();
+                    } else if (typeof msg.collapseThreshold === "number") {
+                        maybeAutoCollapse();
                     }
                 }
             });
@@ -571,20 +624,136 @@
 
     // --- Startup ------------------------------------------------------------
 
+    // --- Element zapper (arm-then-tap, persisted per host) ------------------
+    // The native "Zap" action posts {type:"armZap"}; the NEXT page tap picks the
+    // element under it, hides it, and remembers a structural selector per host so
+    // it stays hidden on return. This is the only way to kill inline JS players /
+    // arbitrary furniture (e.g. Newsweek's <div> VideoContentHub) that has no
+    // src for a network/embed rule to match. Selectors are nth-of-type paths so
+    // they survive build-hashed class-name churn (a site restructure needs a
+    // re-zap, as the user was told).
+    var HIDE_KEY = "_hide::" + HOST;
+    var hideSelectors = [];
+    var zapArmed = false;
+
+    function selectorFor(el) {
+        if (el.id) { try { return "#" + CSS.escape(el.id); } catch (e) { return "#" + el.id; } }
+        var parts = [];
+        var node = el;
+        while (node && node.nodeType === 1 && node !== document.body && parts.length < 6) {
+            var part = node.tagName.toLowerCase();
+            var parent = node.parentElement;
+            if (parent) {
+                var idx = 1;
+                for (var s = node.previousElementSibling; s; s = s.previousElementSibling) {
+                    if (s.tagName === node.tagName) idx++;
+                }
+                part += ":nth-of-type(" + idx + ")";
+            }
+            parts.unshift(part);
+            if (node.id) { try { parts[0] = "#" + CSS.escape(node.id); } catch (e) {} break; }
+            node = node.parentElement;
+        }
+        return parts.join(" > ");
+    }
+
+    function applyHides() {
+        for (var i = 0; i < hideSelectors.length; i++) {
+            try {
+                var els = document.querySelectorAll(hideSelectors[i]);
+                for (var j = 0; j < els.length; j++) els[j].style.setProperty("display", "none", "important");
+            } catch (e) { /* selector no longer valid after a site change — ignore */ }
+        }
+    }
+
+    function doZap(el) {
+        if (!el || el === document.body || el === document.documentElement) return;
+        var sel = selectorFor(el);
+        try { el.style.setProperty("display", "none", "important"); } catch (e) {}
+        if (hideSelectors.indexOf(sel) === -1) {
+            hideSelectors.push(sel);
+            var o = {}; o[HIDE_KEY] = hideSelectors;
+            try { browser.storage.local.set(o); } catch (e) {}
+        }
+        log("zapped " + sel);
+    }
+
+    function armZap() {
+        if (zapArmed) return;
+        zapArmed = true;
+        // Slight dim + banner so it's clear the next tap picks a target. The dim
+        // overlay is pointer-events:none so taps pass THROUGH to the real element;
+        // only the Cancel chip is tappable.
+        var overlay = document.createElement("div");
+        overlay.id = "eink-zap-overlay";
+        overlay.style.cssText =
+            "position:fixed;inset:0;z-index:2147483646;background:rgba(0,0,0,0.06);" +
+            "pointer-events:none;";
+        var banner = document.createElement("div");
+        banner.style.cssText =
+            "position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:2147483647;" +
+            "background:#fafafa;color:#222;border:2px solid #555;border-radius:8px;" +
+            "font:600 13px/1.3 -apple-system,system-ui,sans-serif;padding:6px 10px;" +
+            "pointer-events:none;";
+        banner.textContent = "Tap the element to hide";
+        var cancel = document.createElement("div");
+        cancel.id = "eink-zap-cancel";
+        cancel.style.cssText =
+            "position:fixed;top:8px;right:8px;z-index:2147483647;background:#fafafa;color:#222;" +
+            "border:2px solid #555;border-radius:8px;font:600 13px/1.3 -apple-system,system-ui,sans-serif;" +
+            "padding:6px 10px;pointer-events:auto;cursor:pointer;";
+        cancel.textContent = "Cancel";
+        (document.body || document.documentElement).appendChild(overlay);
+        (document.body || document.documentElement).appendChild(banner);
+        (document.body || document.documentElement).appendChild(cancel);
+        try { document.documentElement.style.cursor = "crosshair"; } catch (e) {}
+
+        function teardown() {
+            zapArmed = false;
+            try { document.documentElement.style.cursor = ""; } catch (e) {}
+            [overlay, banner, cancel].forEach(function (n) { if (n && n.parentNode) n.parentNode.removeChild(n); });
+            document.removeEventListener("pointerdown", onDown, true);
+        }
+        function swallowClick(e) {
+            e.preventDefault(); e.stopPropagation();
+            document.removeEventListener("click", swallowClick, true);
+        }
+        function onDown(e) {
+            e.preventDefault(); e.stopPropagation();
+            document.addEventListener("click", swallowClick, true); // eat the tap that follows
+            if (cancel.contains(e.target)) { teardown(); return; }
+            // Resolve the real element under the point (overlay is pointer-events:none).
+            var t = document.elementFromPoint(e.clientX, e.clientY) || e.target;
+            teardown();
+            doZap(t);
+        }
+        document.addEventListener("pointerdown", onDown, true);
+    }
+
     function start() {
         try {
             // One read for policy + the mirrored view settings, so animations-off,
             // the collapse mode, and the per-host policy are all resolved BEFORE the
             // first placeholders are built (no flash, no wrong-mode first paint).
-            browser.storage.local.get([HOST, "_collapsed", "_animOff"]).then(function (res) {
+            browser.storage.local.get([HOST, "_collapsed", "_animOff", "_collapseMode", "_collapseThreshold", HIDE_KEY]).then(function (res) {
                 res = res || {};
                 applyAnimOff(res._animOff !== false);            // default ON
-                if (typeof res._collapsed === "boolean") collapsed = res._collapsed; // default true
+                if (Array.isArray(res[HIDE_KEY])) hideSelectors = res[HIDE_KEY];
+                if (typeof res._collapseMode === "string") collapseMode = res._collapseMode; // default "auto"
+                if (typeof res._collapseThreshold === "number") collapseThreshold = res._collapseThreshold; // default 6
+                // Mode drives the INITIAL display each load (manual toggles aren't persisted).
+                if (collapseMode === "always") collapsed = true;
+                else if (collapseMode === "never") collapsed = false;
+                else collapsed = false; // auto: start expanded; gatedCount flips it past threshold
                 if (res[HOST]) policy = res[HOST];
                 if (policy === "load-all") mediaAllowAll = true; // stop gating playback
                 log("media policy for " + HOST + " = " + policy + " collapsed=" + collapsed);
                 connectNative();
                 applyPolicy();
+                applyHides();
+                if (document.readyState === "loading") {
+                    document.addEventListener("DOMContentLoaded", applyHides);
+                }
                 startLoginWatch();
             }, function (e) {
                 log("storage.get failed, using defaults: " + e);

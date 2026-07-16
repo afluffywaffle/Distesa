@@ -2,6 +2,7 @@ package com.afluffypancake.achroma
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
@@ -61,11 +62,9 @@ class MainActivity : Activity() {
 
     private lateinit var session: GeckoSession
     private lateinit var view: GeckoView
-    private lateinit var toggle: Button
     private lateinit var imgToggle: Button
     private lateinit var prefs: SharedPreferences
     private lateinit var settingsPanel: LinearLayout
-    private lateinit var cadenceBtn: Button
 
     // Minimal, mostly-hidden navigation chrome (see buildChromeBar()).
     private lateinit var chromeBar: LinearLayout
@@ -98,6 +97,16 @@ class MainActivity : Activity() {
     private var collapseBtn: Button? = null
     private var fullEvery = 6           // EPD full-clear cadence (0 = Off)
 
+    // Auto-collapse threshold. collapseMode ∈ {"always","never","auto"} decides the
+    // page's INITIAL placeholder display; in "auto" images.js flips to collapsed once
+    // more than collapseThreshold media elements have been gated. Mirrored to the
+    // content script via pushSettingsToExtension().
+    private var collapseMode = "auto"
+    private var collapseThreshold = 6
+    // Where the per-page collapse toggle lives. Only "chrome" is wired today; the
+    // key exists so alternate placements can be added without a schema change.
+    private var collapseBtnPlacement = "chrome"
+
     // Load-time measurement.
     private var pageStartMs = 0L
     private var pageHost = ""
@@ -108,7 +117,6 @@ class MainActivity : Activity() {
 
     /** The installed uBlock Origin add-on, once resolved (install or list). */
     private var ublock: WebExtension? = null
-    private var busy = false
 
     /** Live port to the eink content script (images.js), for the image-policy cycle. */
     private var einkPort: WebExtension.Port? = null
@@ -350,7 +358,16 @@ class MainActivity : Activity() {
         bar.addView(backBtn)
         bar.addView(urlField, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         bar.addView(reloadBtn)
-        collapseBtn?.let { bar.addView(it) }
+        // Collapse-toggle placement scaffold. Only "chrome" is implemented; the
+        // when() is the seam where future placements plug in without touching the
+        // rest of the bar. Do NOT add a UI control to change this yet.
+        when (collapseBtnPlacement) {
+            "chrome" -> collapseBtn?.let { bar.addView(it) }
+            else -> {
+                // TODO future collapse-button placements (floating overlay, edge
+                // gesture, hidden). Leave the button un-added so the bar stays clean.
+            }
+        }
         bar.addView(gearBtn)
         return bar
     }
@@ -444,6 +461,9 @@ class MainActivity : Activity() {
         showZones = prefs.getBoolean("showZones", true)
         chromePos = prefs.getString("chromePos", "auto") ?: "auto"
         searchEngine = prefs.getString("searchEngine", "DuckDuckGo") ?: "DuckDuckGo"
+        collapseMode = prefs.getString("collapseMode", "auto") ?: "auto"
+        collapseThreshold = prefs.getInt("collapseThreshold", 6)
+        collapseBtnPlacement = prefs.getString("collapseBtnPlacement", "chrome") ?: "chrome"
         chromeAtBottom = computeChromeAtBottom()
     }
 
@@ -529,52 +549,30 @@ class MainActivity : Activity() {
             setPadding(dp(16), dp(12), dp(16), dp(12))
             visibility = View.GONE
         }
+        // QUICK panel = the handful of controls toggled often. Everything else
+        // lives on the dedicated SettingsActivity ("More settings…").
+        //
         // Toolbar position — the plain, obvious control the user asked for.
         panel.addView(makeCycleRow({ "Toolbar position: ${chromePos.replaceFirstChar { it.uppercase() }}" }) {
             chromePos = when (chromePos) { "auto" -> "top"; "top" -> "bottom"; else -> "auto" }
             prefs.edit().putString("chromePos", chromePos).apply()
             recreate() // structural: rebuild at the new edge
         })
-        panel.addView(makeCycleRow({ "Search: $searchEngine" }) {
-            val names = SEARCH_ENGINES.keys.toList()
-            searchEngine = names[(names.indexOf(searchEngine).coerceAtLeast(0) + 1) % names.size]
-            prefs.edit().putString("searchEngine", searchEngine).apply()
-        })
-        panel.addView(makeCycleRow({ "Nav zones: $navStyle" }) {
-            navStyle = if (navStyle == "inset") "overlay" else "inset"
-            prefs.edit().putString("navStyle", navStyle).apply(); recreate()
-        })
-        panel.addView(makeCycleRow({ "Nav side: $navPlacement" }) {
-            navPlacement = when (navPlacement) { "both" -> "left"; "left" -> "right"; else -> "both" }
-            prefs.edit().putString("navPlacement", navPlacement).apply(); recreate()
-        })
-        panel.addView(makeSwitch("Show tap zones", showZones) { on ->
-            showZones = on; prefs.edit().putBoolean("showZones", on).apply()
-            leftStrip?.let { it.showZones = on; it.invalidate() }
-            rightStrip?.let { it.showZones = on; it.invalidate() }
-        })
         panel.addView(makeSwitch("Animations off", animOff) { on ->
             animOff = on; prefs.edit().putBoolean("animOff", on).apply(); pushSettingsToExtension()
         })
-        panel.addView(makeSwitch("Block web fonts", blockFonts) { on ->
-            blockFonts = on; prefs.edit().putBoolean("blockFonts", on).apply(); pushSettingsToExtension()
-        })
-        panel.addView(makeSwitch("Strict tracking protection", strictTp) { on ->
-            strictTp = on; prefs.edit().putBoolean("strictTp", on).apply()
-            applyTrackingProtection(on); reloadPage()
-        })
-        panel.addView(makeSwitch("JavaScript", jsEnabled) { on ->
-            jsEnabled = on; prefs.edit().putBoolean("jsEnabled", on).apply()
-            if (::session.isInitialized) session.settings.setAllowJavascript(on); reloadPage()
-        })
-        cadenceBtn = makeButton(cadenceLabel()) { cycleCadence() }
-        panel.addView(cadenceBtn)
-        // Folded-in controls (formerly floating buttons): uBlock on/off + image
-        // policy cycle. Behaviour unchanged — only their home moved into the panel.
-        toggle = makeButton("uBlock: …") { onToggleClicked() }.apply { isEnabled = false }
-        panel.addView(toggle)
+        // Image policy cycle (per-domain; content script persists + reloads).
         imgToggle = makeButton("Images: …") { onCycleImagePolicy() }.apply { isEnabled = false }
         panel.addView(imgToggle)
+        // Element zapper: arm picker mode, hide chrome, next page tap hides that
+        // element (persisted per-site). Kills inline JS players / furniture that
+        // has no src for a network/embed rule to match.
+        panel.addView(makeButton("⬡ Zap element (hide)") { onArmZap() })
+        // Everything else moved to the dedicated page.
+        panel.addView(makeButton("More settings…") {
+            settingsPanel.visibility = View.GONE
+            startActivity(Intent(this, SettingsActivity::class.java))
+        })
         return panel
     }
 
@@ -595,18 +593,6 @@ class MainActivity : Activity() {
         val b = makeButton(label(), {})
         b.setOnClickListener { onClick(); b.text = label() }
         return b
-    }
-
-    private fun cadenceLabel(): String =
-        "Full-clear: " + if (fullEvery <= 0) "Off" else fullEvery.toString()
-
-    private fun cycleCadence() {
-        val idx = CADENCE_STEPS.indexOf(fullEvery).let { if (it < 0) 0 else it }
-        fullEvery = CADENCE_STEPS[(idx + 1) % CADENCE_STEPS.size]
-        prefs.edit().putInt("fullEvery", fullEvery).apply()
-        Epd.FULL_EVERY = fullEvery
-        cadenceBtn.text = cadenceLabel()
-        Log.i(TAG, "[eink-diag] EPD full-clear cadence -> ${cadenceLabel()}")
     }
 
     private fun applyTrackingProtection(strict: Boolean) {
@@ -642,7 +628,9 @@ class MainActivity : Activity() {
                 org.json.JSONObject()
                     .put("type", "settings")
                     .put("animOff", animOff)
-                    .put("blockFonts", blockFonts),
+                    .put("blockFonts", blockFonts)
+                    .put("collapseMode", collapseMode)
+                    .put("collapseThreshold", collapseThreshold),
             )
         } catch (e: Throwable) {
             Log.w(TAG, "pushSettingsToExtension threw ${e.javaClass.simpleName}: ${e.message}")
@@ -795,6 +783,21 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Arm the in-page element zapper: close chrome so the page is tappable, then the next tap hides that element. */
+    private fun onArmZap() {
+        val port = einkPort
+        if (port == null) {
+            Log.w(TAG, "arm zap: no eink port yet")
+            return
+        }
+        hideChrome() // get chrome + panel out of the way so the next tap lands on the page
+        try {
+            port.postMessage(org.json.JSONObject().put("type", "armZap"))
+        } catch (e: Throwable) {
+            Log.w(TAG, "armZap post threw ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
     /** Ask the content script to advance this domain's image policy (it persists + reloads). */
     private fun onCycleImagePolicy() {
         val port = einkPort
@@ -867,49 +870,38 @@ class MainActivity : Activity() {
         )
     }
 
-    /** Cache the add-on and reflect its current enabled state in the button. */
+    /** Cache the resolved add-on. The on/off UI now lives in SettingsActivity. */
     private fun onExtResolved(ext: WebExtension?) {
         ublock = ext
-        busy = false
-        toggle.isEnabled = ext != null
-        refreshLabel()
     }
 
-    private fun onToggleClicked() {
-        val ext = ublock ?: return
-        if (busy) return
-        busy = true
-        toggle.isEnabled = false
-        val controller = sharedRuntime(this).webExtensionController
-        val enabled = ext.metaData.enabled
-        val result: GeckoResult<WebExtension> = if (enabled) {
-            controller.disable(ext, WebExtensionController.EnableSource.USER)
-        } else {
-            controller.enable(ext, WebExtensionController.EnableSource.USER)
-        }
-        result.accept(
-            { updated ->
-                Log.i(TAG, "uBlock now ${if (updated?.metaData?.enabled == true) "enabled" else "disabled"}")
-                onExtResolved(updated)
-                // Reload so the (dis)enabled content blocker takes effect on the page.
-                session.reload()
-            },
-            { e ->
-                Log.w(TAG, "toggle failed: ${e?.message}")
-                busy = false
-                toggle.isEnabled = true
-                refreshLabel()
-            },
+    override fun onResume() {
+        super.onResume()
+        if (!::prefs.isInitialized) return
+        // Re-read settings that SettingsActivity may have changed and apply them.
+        val oldStructural = listOf(navStyle, navPlacement, chromePos, showZones.toString())
+        val oldContent = listOf(
+            strictTp.toString(), jsEnabled.toString(), blockFonts.toString(), animOff.toString(),
+            collapseMode, collapseThreshold.toString(), fullEvery.toString(),
         )
-    }
-
-    private fun refreshLabel() {
-        val ext = ublock
-        toggle.text = when {
-            ext == null -> "uBlock: n/a"
-            ext.metaData.enabled -> "uBlock: on"
-            else -> "uBlock: off"
-        }
+        loadSettings()
+        val newStructural = listOf(navStyle, navPlacement, chromePos, showZones.toString())
+        val newContent = listOf(
+            strictTp.toString(), jsEnabled.toString(), blockFonts.toString(), animOff.toString(),
+            collapseMode, collapseThreshold.toString(), fullEvery.toString(),
+        )
+        // Engine-level levers apply immediately.
+        applyTrackingProtection(strictTp)
+        Epd.FULL_EVERY = fullEvery
+        if (::session.isInitialized) session.settings.setAllowJavascript(jsEnabled)
+        // Content-script levers (animations, fonts, collapse) pushed to the extension.
+        pushSettingsToExtension()
+        // A structural change (edge/nav) needs a full rebuild.
+        if (oldStructural != newStructural) { recreate(); return }
+        // A content-affecting change (or a uBlock toggle from settings) needs a reload.
+        val ublockDirty = prefs.getBoolean("ublockDirty", false)
+        if (ublockDirty) prefs.edit().putBoolean("ublockDirty", false).apply()
+        if ((oldContent != newContent || ublockDirty) && ::session.isInitialized) session.reload()
     }
 
     override fun onDestroy() {
@@ -950,13 +942,16 @@ class MainActivity : Activity() {
         private const val TAG = "AchromaMain"
 
         /** EPD full-clear cadence steps cycled by the settings button (0 = Off). */
-        private val CADENCE_STEPS = intArrayOf(0, 4, 6, 8, 10, 15)
+        internal val CADENCE_STEPS = intArrayOf(0, 4, 6, 8, 10, 15)
+
+        /** Auto-collapse threshold steps cycled on the settings page. */
+        internal val COLLAPSE_THRESHOLD_STEPS = intArrayOf(3, 5, 6, 8, 10, 15)
 
         /** Dark ink for all (light) chrome — high contrast, no colour. */
-        private const val CHROME_INK = 0xFF222222.toInt()
+        internal const val CHROME_INK = 0xFF222222.toInt()
 
         /** Built-in search engines (query templates, %s = encoded query). */
-        private val SEARCH_ENGINES = linkedMapOf(
+        internal val SEARCH_ENGINES = linkedMapOf(
             "DuckDuckGo" to "https://duckduckgo.com/?q=%s",
             "Startpage" to "https://www.startpage.com/sp/search?query=%s",
             "Brave" to "https://search.brave.com/search?q=%s",
@@ -986,16 +981,16 @@ class MainActivity : Activity() {
         private const val EINK_URI = "resource://android/assets/extensions/eink/"
 
         /** uBlock Origin's stable add-on id (used to detect an existing install). */
-        private const val UBLOCK_ID = "uBlock0@raymondhill.net"
+        internal const val UBLOCK_ID = "uBlock0@raymondhill.net"
 
         /** AMO "latest" signed xpi for uBlock Origin (302-redirects to the current version). */
-        private const val UBLOCK_XPI =
+        internal const val UBLOCK_XPI =
             "https://addons.mozilla.org/firefox/downloads/latest/ublock-origin/latest.xpi"
 
         @Volatile private var runtime: GeckoRuntime? = null
 
         /** Process-wide GeckoRuntime singleton. */
-        private fun sharedRuntime(activity: Activity): GeckoRuntime {
+        internal fun sharedRuntime(activity: Activity): GeckoRuntime {
             return runtime ?: synchronized(this) {
                 runtime ?: createRuntime(activity).also { runtime = it }
             }
