@@ -11,12 +11,12 @@ plugins {
 }
 
 android {
-    namespace = "com.afluffypancake.distesa"
+    namespace = "com.afluffywaffle.distesa"
     compileSdk = 36
 
     defaultConfig {
         // .dev suffix so this spike installs ALONGSIDE other apps on the device.
-        applicationId = "com.afluffypancake.distesa.dev"
+        applicationId = "com.afluffywaffle.distesa.dev"
         minSdk = 30 // Nomad/Manta are Android 11.
         targetSdk = 36
         versionCode = 1

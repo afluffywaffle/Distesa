@@ -8,7 +8,7 @@ Threads: `phase1` (Distesa Phase-1 UI/media/settings + naming)
 _Updated 2026-07-15 (session b)_
 
 **Project:** Distesa — minimal e-ink web browser for Supernote Nomad/Manta (GeckoView).
-Formerly "Achroma". Local path `~/Develop/Achroma` (folder NOT renamed). Public repo:
+Formerly "Achroma". Local path `~/Develop/Distesa` (folder renamed 2026-07-16). Public repo:
 **https://github.com/afluffywaffle/Distesa**.
 
 ---
@@ -179,7 +179,7 @@ Shipped (committed; `88c87ba` zapper, `9d57737` the rest):
   then `./gradlew :app:assembleDebug`. System java too new. ~540MB APK, wifi install ~2min.
 - Delegate the Gradle build to a cheap subagent (returns pass/fail only) — keeps the
   compile log out of the main context.
-- Nomad pkg `com.afluffypancake.distesa.dev`. SettingsActivity is `exported=false` — can't
+- Nomad pkg `com.afluffywaffle.distesa.dev`. SettingsActivity is `exported=false` — can't
   `am start` it from adb; reach it via ⚙ quick panel → "More settings…".
 - 7s chrome auto-hide makes screenshot-driven multi-tap navigation flaky; use uiautomator
   dump for exact button bounds when driving.
@@ -187,7 +187,7 @@ Shipped (committed; `88c87ba` zapper, `9d57737` the rest):
   `[eink-ime]` under tag DistesaMain.
 
 ### Next session — paste this to start
-> Resume **Distesa**, thread **phase1** (repo ~/Develop/Achroma, tip of branch
+> Resume **Distesa**, thread **phase1** (repo ~/Develop/Distesa, tip of branch
 > `ime-input-fixes`, unpushed). Last session fixed the address-bar input chain on the
 > **Manta** (verified on-device): edge-to-edge IME insets, showSoftInput under
 > adjustNothing, robust Enter, an onLoadError e-ink error page, the hidden

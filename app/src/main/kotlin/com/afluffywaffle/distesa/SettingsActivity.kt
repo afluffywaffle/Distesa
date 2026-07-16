@@ -1,4 +1,4 @@
-package com.afluffypancake.distesa
+package com.afluffywaffle.distesa
 
 import android.app.Activity
 import android.content.SharedPreferences

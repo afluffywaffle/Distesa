@@ -211,7 +211,7 @@ locally and git-ignored — recreate it if cloning fresh.
 ~/Library/Android/sdk/platform-tools/adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Application ID is `com.afluffypancake.distesa.dev` (the `.dev` suffix installs it
+Application ID is `com.afluffywaffle.distesa.dev` (the `.dev` suffix installs it
 alongside other apps on the device).
 
 On the device, the EPD reflection path requires hidden-API access:

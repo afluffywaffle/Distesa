@@ -1,4 +1,4 @@
-package com.afluffypancake.distesa.eink
+package com.afluffywaffle.distesa.eink
 
 import android.view.View
 
