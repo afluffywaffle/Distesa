@@ -164,14 +164,17 @@ Shipped (committed; `88c87ba` zapper, `9d57737` the rest):
   `[eink-ime]` under tag DistesaMain.
 
 ### Next session — paste this to start
-> Resume **Distesa**, thread **phase1** (repo ~/Develop/Achroma, HEAD `9d57737`). Last
-> session shipped edge-sliver chrome buttons, an IME-aware address bar, a GDPR banner-tap
-> fix, e-ink UI polish, and safe security/perf fixes — all committed but **not yet
-> verified on-device** (paused to change locations). Read `HANDOFF.md` → `## Thread:
-> phase1` and the `handoff_phase1` memory. First task: **on-device verification**. Start
-> on the **Manta** (USB serial `SN100C10008955`, wifi `192.168.12.185:5555`; needs `adb
-> shell settings put global hidden_api_policy 0`) — but note the **IME-lift fix needs the
-> Nomad** (Manta is >9" so chrome anchors top and the fix is a no-op there): on Nomad,
-> type in the address bar and confirm `[eink-ime] inset=<non-zero>` in logcat AND the bar
-> sits just above the panel; if inset logs 0, fall back to top-relocation. Also verify:
-> banner tap doesn't drop, settings Done + flat surfaces + ☑/☐ rows, edge-slot config.
+> Resume **Distesa**, thread **phase1** (repo ~/Develop/Achroma, branch `ime-input-fixes`
+> HEAD `6d76932`, unpushed). Last session fixed the address-bar input chain on the
+> **Manta** (verified on-device): edge-to-edge IME insets, showSoftInput under
+> adjustNothing, robust Enter, an onLoadError e-ink error page, the hidden
+> `getInputMethodWindowVisibleHeight()` lift so the handwriting autocomplete no longer
+> covers the bar, floating-pane styling + resting edge-gap. Read `HANDOFF.md` → `##
+> Thread: phase1` (session b) and the `handoff_phase1` memory; **also read
+> `~/Develop/supernote-dev-reference/README.md` before any Supernote work.** Device: Manta
+> serial `SN100C10008955` over Tailscale `100.98.2.91:5555` (`hidden_api_policy` already
+> 0). First task: **verify the same IME flow on the Nomad** (bottom-chrome by default;
+> confirm `getInputMethodWindowVisibleHeight` returns non-negative and the lift/pane look
+> right), then decide whether to push/merge `ime-input-fixes`. Backlog (in the Open/next
+> list): page-flip distance calibration (~75% + user setting), domain/title bar,
+> auto-focus address bar on chrome reveal.
