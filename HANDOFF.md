@@ -77,6 +77,16 @@ rules, DNS diagnosis. **Read it first for any future Supernote work.**
   selects a provider; passkeys/WebAuthn as the modern target. Full write-up in
   **`SECURITY.md`** (repo root), incl. the app-surface hardening checklist that folds in
   the session-(a) deferred security items.
+- **Security pillar (tracked; next handoff, not top priority yet but non-negotiable —
+  "browsers must be trusted"):** DONE this session → `allowBackup=false`. Remaining, in
+  recommended order (see `SECURITY.md` checklist): (1) replace `AutoApprovePromptDelegate`
+  with a **real consent dialog**, then (2) enable `extensionsWebAPIEnabled(true)` to give
+  the Firefox-style "Add to Firefox" install flow from AMO inside Distesa — these two are
+  ONE coupled piece and also deliver **user-installable extensions** (incl. a password-
+  manager extension). Lower/again-later: cert-error specific messaging (GeckoView already
+  never auto-bypasses cert errors — verify invariant), and **release signing + R8/minify**
+  (currently release is debug-signed; distribution-time). Already fine: exported flags
+  (launcher must be exported; SettingsActivity is not), ETP label-boundary matching.
 - Deferred opt batch #2 and deferred security items from session (a) still stand (below).
 
 ---
