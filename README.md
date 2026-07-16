@@ -6,6 +6,9 @@ tuned for a monochrome EPD panel: no chrome clutter, greyscale-safe affordances,
 edge-tap navigation, and a rendering path that drives the Supernote EPD refresh
 waveforms directly.
 
+**See [`docs/tuning.md`](docs/tuning.md)** for the performance levers — how each
+one affects page loading, and the guard that keeps it from breaking a page.
+
 ## Engine decision — GeckoView (Phase 0 closed)
 
 **GeckoView is the engine.** Phase 0 was scoped as a two-engine gate (Spike A
