@@ -1,5 +1,5 @@
 /*
- * Achroma E-Ink content script — tap-to-flip page turning.
+ * Distesa E-Ink content script — tap-to-flip page turning.
  *
  * Ported from eita's "Page Scroll" extension (Shared (Extension)/Resources/
  * content.js). Kept: the quantized viewport-jump pagination CORE —

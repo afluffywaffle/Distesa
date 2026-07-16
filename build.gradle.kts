@@ -1,4 +1,4 @@
-// Root build for Achroma — a minimal e-ink web browser for the Supernote
+// Root build for Distesa — a minimal e-ink web browser for the Supernote
 // Nomad/Manta (RK3566, Android 11). Phase 0 Spike A evaluates GeckoView.
 // Build config mirrors the known-good layuv android_native setup.
 plugins {

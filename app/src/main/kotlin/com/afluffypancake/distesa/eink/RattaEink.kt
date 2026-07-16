@@ -1,4 +1,4 @@
-package com.afluffypancake.achroma.eink
+package com.afluffypancake.distesa.eink
 
 import android.content.Context
 import android.util.Log
@@ -16,7 +16,7 @@ import android.util.Log
  * reader-specific coupling, so it is copied verbatim aside from the package.
  */
 internal object RattaEink {
-    private const val TAG = "AchromaRattaEink"
+    private const val TAG = "DistesaRattaEink"
     private const val SERVICE = "eink"
 
     @Volatile private var manager: Any? = null

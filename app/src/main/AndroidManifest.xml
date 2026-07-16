@@ -5,7 +5,7 @@
 
     <application
         android:allowBackup="true"
-        android:label="Achroma"
+        android:label="Distesa"
         android:supportsRtl="true"
         android:theme="@style/Theme.AppCompat.NoActionBar">
 

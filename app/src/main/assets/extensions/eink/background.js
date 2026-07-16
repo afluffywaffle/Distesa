@@ -1,5 +1,5 @@
 /*
- * Achroma E-Ink — background: network media-block + native relay.
+ * Distesa E-Ink — background: network media-block + native relay.
  *
  * TWO JOBS:
  *
@@ -64,7 +64,7 @@ function log(msg) {
 
 // DIAGNOSTIC: background console.log does NOT reliably reach adb logcat, so send
 // diagnostics to the app via native messaging — MainActivity logs them under tag
-// AchromaMain as "[eink-diag] ...". Used to prove whether onBeforeRequest fires
+// DistesaMain as "[eink-diag] ...". Used to prove whether onBeforeRequest fires
 // and whether {cancel:true} is honored.
 //
 // The app's MessageDelegate is registered slightly AFTER the background starts,

@@ -1,12 +1,12 @@
 {
     "manifest_version": 2,
-    "name": "Achroma E-Ink",
+    "name": "Distesa E-Ink",
     "description": "Tap-to-flip quantized page turning tuned for e-ink (Supernote).",
     "version": "1.0",
 
     "browser_specific_settings": {
         "gecko": {
-            "id": "eink@achroma"
+            "id": "eink@distesa"
         }
     },
 

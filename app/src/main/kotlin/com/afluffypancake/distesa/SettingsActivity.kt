@@ -1,4 +1,4 @@
-package com.afluffypancake.achroma
+package com.afluffypancake.distesa
 
 import android.app.Activity
 import android.content.SharedPreferences
@@ -16,11 +16,11 @@ import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.WebExtensionController
 
 /**
- * Achroma — the dedicated, full settings page.
+ * Distesa — the dedicated, full settings page.
  *
  * Hosts everything that isn't a fast, frequently-flipped toggle (those stay in the
  * chrome-bar pop-up in [MainActivity.buildSettingsPanel]). Reads and writes the SAME
- * SharedPreferences ("achroma_settings"); MainActivity re-reads them + pushes
+ * SharedPreferences ("distesa_settings"); MainActivity re-reads them + pushes
  * content-script levers in onResume, applying structural changes (recreate) and
  * reloads as needed. Same house style: LIGHT background, no animation, bordered
  * surface, transparent-fill buttons with dark ink.
@@ -47,7 +47,7 @@ class SettingsActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        prefs = getSharedPreferences("achroma_settings", MODE_PRIVATE)
+        prefs = getSharedPreferences("distesa_settings", MODE_PRIVATE)
         searchEngine = prefs.getString("searchEngine", "DuckDuckGo") ?: "DuckDuckGo"
         navStyle = prefs.getString("navStyle", "inset") ?: "inset"
         navPlacement = prefs.getString("navPlacement", "both") ?: "both"
@@ -59,7 +59,7 @@ class SettingsActivity : Activity() {
         collapseMode = prefs.getString("collapseMode", "auto") ?: "auto"
         collapseThreshold = prefs.getInt("collapseThreshold", 6)
 
-        title = "Achroma settings"
+        title = "Distesa settings"
 
         val root = ScrollView(this).apply {
             setBackgroundColor(0xFFFFFFFF.toInt()) // white page — never a dark band
@@ -230,6 +230,6 @@ class SettingsActivity : Activity() {
     }
 
     companion object {
-        private const val TAG = "AchromaSettings"
+        private const val TAG = "DistesaSettings"
     }
 }

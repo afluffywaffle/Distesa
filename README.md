@@ -1,6 +1,6 @@
-# Achroma
+# Distesa
 
-Achroma is a minimal, e-ink-first web browser for the Supernote Nomad and Manta
+Distesa is a minimal, e-ink-first web browser for the Supernote Nomad and Manta
 (RK3566, Android 11). It aims to be a fast, low-ghosting, ad-free reading browser
 tuned for a monochrome EPD panel: no chrome clutter, greyscale-safe affordances,
 edge-tap navigation, and a rendering path that drives the Supernote EPD refresh
@@ -158,7 +158,7 @@ Maven Central, so `settings.gradle.kts` adds that repository.
   (`EdgeNavView` remains unwired — a later Phase 1 step.)
 - **Settings panel** (opened by `⚙` on the chrome bar): a minimal greyscale panel
   of e-ink performance levers plus the folded-in uBlock/Images rows, all persisted
-  in `SharedPreferences` (`achroma_settings`) and applied live. NOT a reader mode.
+  in `SharedPreferences` (`distesa_settings`) and applied live. NOT a reader mode.
   - **Animations off** (default on) — content-script CSS
     (`*{animation/transition:none;scroll-behavior:auto}`) injected/removed by
     `images.js`; pushed over the port and mirrored to `storage` so it applies at
@@ -186,7 +186,7 @@ Maven Central, so `settings.gradle.kts` adds that repository.
 
   Load-time measurement: a `ProgressDelegate` logs each page as
   `[eink-perf] page=<host> loadMs=NNNN js=<on/off> fonts=<blocked/on>`
-  `tp=<strict/off> anim=<off/on>` (tag `AchromaMain`) so each lever's effect is
+  `tp=<strict/off> anim=<off/on>` (tag `DistesaMain`) so each lever's effect is
   readable in logcat.
 
 ## Build
@@ -211,7 +211,7 @@ locally and git-ignored — recreate it if cloning fresh.
 ~/Library/Android/sdk/platform-tools/adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Application ID is `com.afluffypancake.achroma.dev` (the `.dev` suffix installs it
+Application ID is `com.afluffypancake.distesa.dev` (the `.dev` suffix installs it
 alongside other apps on the device).
 
 On the device, the EPD reflection path requires hidden-API access:
@@ -257,7 +257,7 @@ notes/measurements as you go):
 | Media policy persists per-domain across reloads/relaunch | |
 | Refresh / ghosting quality on page flip (subjective) | |
 
-### Debugging the media network-block (`adb logcat -s AchromaMain`)
+### Debugging the media network-block (`adb logcat -s DistesaMain`)
 
 The bundled extension's `console.log` does not reliably reach logcat, so
 diagnostics are relayed to the native side and logged as `[eink-diag] …`:

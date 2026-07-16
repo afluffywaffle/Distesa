@@ -1,4 +1,4 @@
-package com.afluffypancake.achroma.eink
+package com.afluffypancake.distesa.eink
 
 import android.content.Context
 import android.graphics.Canvas

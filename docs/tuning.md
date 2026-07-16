@@ -1,6 +1,6 @@
-# Achroma tuning reference
+# Distesa tuning reference
 
-Achroma trades away parts of the modern web on purpose, to stay fast and legible
+Distesa trades away parts of the modern web on purpose, to stay fast and legible
 on a 4 GB e-ink Supernote. Every lever below is a deliberate default you can
 change. Two things matter for each: **what it does to page loading** (speed), and
 **whether it can break a page** (and the guard we ship so it usually doesn't).

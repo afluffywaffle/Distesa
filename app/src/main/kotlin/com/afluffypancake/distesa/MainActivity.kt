@@ -1,4 +1,4 @@
-package com.afluffypancake.achroma
+package com.afluffypancake.distesa
 
 import android.app.Activity
 import android.content.Context
@@ -22,7 +22,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import androidx.appcompat.widget.SwitchCompat
-import com.afluffypancake.achroma.eink.EdgeNavView
+import com.afluffypancake.distesa.eink.EdgeNavView
 import java.net.URLEncoder
 import kotlin.math.hypot
 import org.mozilla.geckoview.ContentBlocking
@@ -33,10 +33,10 @@ import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.WebExtensionController
-import com.afluffypancake.achroma.eink.Epd
+import com.afluffypancake.distesa.eink.Epd
 
 /**
- * Achroma Phase 0 Spike A — the GeckoView engine evaluation.
+ * Distesa Phase 0 Spike A — the GeckoView engine evaluation.
  *
  * Minimal by design: a single full-screen [GeckoView] backed by a process-wide
  * [GeckoRuntime] singleton and one [GeckoSession]. No tabs, no address bar — that
@@ -449,7 +449,7 @@ class MainActivity : Activity() {
     // --- Settings: persistence + panel + levers -----------------------------
 
     private fun loadSettings() {
-        prefs = getSharedPreferences("achroma_settings", MODE_PRIVATE)
+        prefs = getSharedPreferences("distesa_settings", MODE_PRIVATE)
         animOff = prefs.getBoolean("animOff", true)
         blockFonts = prefs.getBoolean("blockFonts", true)
         strictTp = prefs.getBoolean("strictTp", true)
@@ -707,7 +707,7 @@ class MainActivity : Activity() {
                     "flip" -> onFlip()
                     // DIAGNOSTIC: background.js reports webRequest capability +
                     // request/cancel counters here (its own console.log doesn't
-                    // reliably reach logcat), surfaced under tag AchromaMain.
+                    // reliably reach logcat), surfaced under tag DistesaMain.
                     "diag" -> Log.i(TAG, "[eink-diag] ${obj?.optString("msg")}")
                 }
             } catch (e: Throwable) {
@@ -939,7 +939,7 @@ class MainActivity : Activity() {
     }
 
     companion object {
-        private const val TAG = "AchromaMain"
+        private const val TAG = "DistesaMain"
 
         /** EPD full-clear cadence steps cycled by the settings button (0 = Off). */
         internal val CADENCE_STEPS = intArrayOf(0, 4, 6, 8, 10, 15)

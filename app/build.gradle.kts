@@ -1,4 +1,4 @@
-// Achroma :app — the GeckoView e-ink browser spike. Classic Views (NOT Compose):
+// Distesa :app — the GeckoView e-ink browser spike. Classic Views (NOT Compose):
 // a full-screen GeckoView backed by a singleton GeckoRuntime + GeckoSession.
 //
 // Repositories are NOT declared here: the settings.gradle.kts
@@ -11,12 +11,12 @@ plugins {
 }
 
 android {
-    namespace = "com.afluffypancake.achroma"
+    namespace = "com.afluffypancake.distesa"
     compileSdk = 36
 
     defaultConfig {
         // .dev suffix so this spike installs ALONGSIDE other apps on the device.
-        applicationId = "com.afluffypancake.achroma.dev"
+        applicationId = "com.afluffypancake.distesa.dev"
         minSdk = 30 // Nomad/Manta are Android 11.
         targetSdk = 36
         versionCode = 1

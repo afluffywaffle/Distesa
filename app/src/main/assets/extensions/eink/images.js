@@ -1,5 +1,5 @@
 /*
- * Achroma E-Ink — media-policy content script (images + video + embeds).
+ * Distesa E-Ink — media-policy content script (images + video + embeds).
  *
  * Companion to background.js. The BACKGROUND blocks image/video bytes at the
  * network layer (webRequest); THIS script shows sized tap-to-load placeholders
@@ -82,7 +82,7 @@
                 if (!mediaAllowed(this)) {
                     try { this.pause && this.pause(); } catch (e) {}
                     try { this.autoplay = false; } catch (e) {}
-                    return Promise.reject(new DOMException("blocked by Achroma", "NotAllowedError"));
+                    return Promise.reject(new DOMException("blocked by Distesa", "NotAllowedError"));
                 }
                 return realPlay.apply(this, arguments);
             };
