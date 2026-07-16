@@ -42,6 +42,7 @@ class SettingsActivity : Activity() {
     private var collapseThreshold = 6
     private var edgeSlotLeft = "chrome"
     private var edgeSlotRight = "collapse"
+    private var autoFocusOnReveal = true
 
     private var ublock: WebExtension? = null
     private var ublockBusy = false
@@ -62,6 +63,7 @@ class SettingsActivity : Activity() {
         collapseThreshold = prefs.getInt("collapseThreshold", 6)
         edgeSlotLeft = prefs.getString("edgeSlotLeft", "chrome") ?: "chrome"
         edgeSlotRight = prefs.getString("edgeSlotRight", "collapse") ?: "collapse"
+        autoFocusOnReveal = prefs.getBoolean("autoFocusOnReveal", true)
 
         title = "Distesa settings"
 
@@ -150,6 +152,12 @@ class SettingsActivity : Activity() {
             edgeSlotRight = nextSlot(edgeSlotRight)
             prefs.edit().putString("edgeSlotRight", edgeSlotRight).apply()
         })
+        // When the ⌕ sliver reveals the toolbar, also focus the address bar so the user
+        // can type immediately. Off = reveal only (for users who open chrome to hit
+        // Back/⟳); those users can also put Back/Refresh on the other edge sliver.
+        panel.addView(makeSwitch("Focus address bar on open", autoFocusOnReveal) { on ->
+            autoFocusOnReveal = on; prefs.edit().putBoolean("autoFocusOnReveal", on).apply()
+        })
 
         panel.addView(header("Extensions"))
         ublockBtn = makeButton("uBlock: …") { onToggleUBlock() }.apply { isEnabled = false }
@@ -210,12 +218,19 @@ class SettingsActivity : Activity() {
         "Full-clear: " + if (fullEvery <= 0) "Off" else fullEvery.toString()
 
     /** Edge-sliver slot cycle. "favorites" is reserved for a future feature. */
-    private fun nextSlot(slot: String): String =
-        when (slot) { "chrome" -> "collapse"; "collapse" -> "none"; else -> "chrome" }
+    private fun nextSlot(slot: String): String = when (slot) {
+        "chrome" -> "collapse"
+        "collapse" -> "back"
+        "back" -> "refresh"
+        "refresh" -> "none"
+        else -> "chrome"
+    }
 
     private fun slotLabel(slot: String): String = when (slot) {
-        "chrome" -> "☰ Toolbar"
+        "chrome" -> "⌕ Address bar"
         "collapse" -> "⊟ Collapse"
+        "back" -> "‹ Back"
+        "refresh" -> "⟳ Refresh"
         else -> "None"
     }
 

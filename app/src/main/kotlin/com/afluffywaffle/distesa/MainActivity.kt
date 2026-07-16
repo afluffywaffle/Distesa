@@ -91,10 +91,17 @@ class MainActivity : Activity() {
     // Edge-sliver action slots: a small button at the bottom of each nav strip,
     // ALWAYS drawn (independent of showZones) so there is always a way to surface
     // chrome. Values: "chrome" (reveal toolbar) | "collapse" (flip placeholders) |
-    // "none". A load-time guard forces at least one slot to "chrome" so the user can
-    // never lock themselves out of the toolbar. "favorites" is reserved for later.
+    // "back" (history back) | "refresh" (reload) | "none". A load-time guard forces
+    // at least one slot to "chrome" so the user can never lock themselves out of the
+    // toolbar. "favorites" is reserved for later.
     private var edgeSlotLeft = "chrome"
     private var edgeSlotRight = "collapse"
+
+    // Auto-focus the address field when the toolbar is revealed by an explicit tap on
+    // the chrome sliver (⌕). Since chrome is hidden by default, this makes the sliver a
+    // one-tap "type an address" affordance; back/⟳ stay reachable on the revealed bar
+    // (and can be put on the other sliver). Never fires on the idle-timer reveal.
+    private var autoFocusOnReveal = true
 
     // E-ink performance levers (persisted in SharedPreferences; see loadSettings()).
     private var animOff = true          // inject animation/transition-killing CSS
@@ -169,6 +176,7 @@ class MainActivity : Activity() {
         session.settings.setAllowJavascript(jsEnabled)
         session.progressDelegate = PerfProgressDelegate
         session.navigationDelegate = EtpNavigationDelegate
+        session.permissionDelegate = DenyPermissionDelegate
 
         view = GeckoView(this)
         view.setSession(session)
@@ -297,7 +305,9 @@ class MainActivity : Activity() {
     private fun makeSliverButton(slot: String): Button {
         val glyph = when (slot) {
             "collapse" -> if (imagesCollapsed) "⊞" else "⊟"
-            else -> "☰" // chrome
+            "back" -> "‹"
+            "refresh" -> "⟳"
+            else -> ADDRESS_GLYPH // chrome — reads as an address/search affordance
         }
         return Button(this).apply {
             text = glyph
@@ -308,6 +318,8 @@ class MainActivity : Activity() {
             setOnClickListener {
                 when (slot) {
                     "collapse" -> { onToggleCollapse(); text = if (imagesCollapsed) "⊞" else "⊟" }
+                    "back" -> if (::session.isInitialized && canGoBack) session.goBack()
+                    "refresh" -> if (::session.isInitialized) { session.reload(); afterNav() }
                     else -> toggleChrome()
                 }
             }
@@ -458,10 +470,13 @@ class MainActivity : Activity() {
     }
 
     private fun toggleChrome() {
-        if (chromeBar.visibility == View.VISIBLE) hideChrome() else showChrome()
+        // An explicit sliver tap is the only reveal path (the idle timer only hides), so
+        // honour the auto-focus setting here — a tap to open the toolbar is almost always
+        // a tap to type an address.
+        if (chromeBar.visibility == View.VISIBLE) hideChrome() else showChrome(autoFocusOnReveal)
     }
 
-    private fun showChrome() {
+    private fun showChrome(autoFocus: Boolean = false) {
         chromeBar.visibility = View.VISIBLE
         currentUrl?.let { urlField.setText(it) }
         // Shrink the web viewport by the chrome height so the bar doesn't cover the
@@ -469,6 +484,12 @@ class MainActivity : Activity() {
         // cookie consent) sits under the bar and its buttons can't be tapped.
         chromeBar.post { applyChromeInset(true) }
         scheduleAutoHide()
+        if (autoFocus) {
+            // requestFocus fires the field's OnFocusChangeListener, which shows the IME,
+            // starts the height poll, and cancels the auto-hide. selectAll so the first
+            // keystroke replaces the current URL instead of appending to it.
+            urlField.post { urlField.requestFocus(); urlField.selectAll() }
+        }
     }
 
     /**
@@ -656,6 +677,7 @@ class MainActivity : Activity() {
         collapseBtnPlacement = prefs.getString("collapseBtnPlacement", "chrome") ?: "chrome"
         edgeSlotLeft = prefs.getString("edgeSlotLeft", "chrome") ?: "chrome"
         edgeSlotRight = prefs.getString("edgeSlotRight", "collapse") ?: "collapse"
+        autoFocusOnReveal = prefs.getBoolean("autoFocusOnReveal", true)
         // Lockout guard: with tap-to-dismiss and the centre reveal-strip gone, the
         // sliver is the ONLY way to open the toolbar. If the user cleared it from
         // both slots, force the left one back to chrome.
@@ -741,6 +763,39 @@ class MainActivity : Activity() {
             uri: String?,
             error: org.mozilla.geckoview.WebRequestError,
         ): GeckoResult<String>? = GeckoResult.fromValue(buildErrorPage(uri, error))
+    }
+
+    /**
+     * Deny-by-default content permissions. A minimal reader browser has no UI to make
+     * an informed geo/cam/mic/notification grant, so silently denying is the safe stance
+     * (the site sees a normal "permission denied", same as a user hitting Block). Without
+     * a delegate set, Gecko applies its own default handling — we make the policy explicit
+     * so nothing can request-and-get camera/mic/location on an e-ink tablet.
+     */
+    private val DenyPermissionDelegate = object : GeckoSession.PermissionDelegate {
+        override fun onContentPermissionRequest(
+            s: GeckoSession,
+            perm: GeckoSession.PermissionDelegate.ContentPermission,
+        ): GeckoResult<Int> =
+            GeckoResult.fromValue(GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
+
+        override fun onMediaPermissionRequest(
+            s: GeckoSession,
+            uri: String,
+            video: Array<out GeckoSession.PermissionDelegate.MediaSource>?,
+            audio: Array<out GeckoSession.PermissionDelegate.MediaSource>?,
+            callback: GeckoSession.PermissionDelegate.MediaCallback,
+        ) {
+            callback.reject()
+        }
+
+        override fun onAndroidPermissionsRequest(
+            s: GeckoSession,
+            permissions: Array<out String>?,
+            callback: GeckoSession.PermissionDelegate.Callback,
+        ) {
+            callback.reject()
+        }
     }
 
     /** Maps a Gecko load error to a short, plain-language reason for the error page. */
@@ -862,6 +917,10 @@ class MainActivity : Activity() {
     private fun applyTrackingProtection(strict: Boolean) {
         try {
             val cb = sharedRuntime(this).settings.contentBlocking
+            // Safe Browsing (malware/phishing/unwanted-software) is independent of the
+            // anti-tracking ETP level. Likely default-on, but set it explicitly so a
+            // future ETP refactor can't silently drop malware/phishing blocking.
+            cb.setSafeBrowsing(ContentBlocking.SafeBrowsing.DEFAULT)
             if (strict) {
                 cb.setEnhancedTrackingProtectionLevel(ContentBlocking.EtpLevel.STRICT)
                 cb.setAntiTracking(
@@ -1158,13 +1217,15 @@ class MainActivity : Activity() {
         super.onResume()
         if (!::prefs.isInitialized) return
         // Re-read settings that SettingsActivity may have changed and apply them.
-        val oldStructural = listOf(navStyle, navPlacement, chromePos, showZones.toString())
+        val oldStructural =
+            listOf(navStyle, navPlacement, chromePos, showZones.toString(), edgeSlotLeft, edgeSlotRight)
         val oldContent = listOf(
             strictTp.toString(), jsEnabled.toString(), blockFonts.toString(), animOff.toString(),
             collapseMode, collapseThreshold.toString(), fullEvery.toString(),
         )
         loadSettings()
-        val newStructural = listOf(navStyle, navPlacement, chromePos, showZones.toString())
+        val newStructural =
+            listOf(navStyle, navPlacement, chromePos, showZones.toString(), edgeSlotLeft, edgeSlotRight)
         val newContent = listOf(
             strictTp.toString(), jsEnabled.toString(), blockFonts.toString(), animOff.toString(),
             collapseMode, collapseThreshold.toString(), fullEvery.toString(),
@@ -1229,6 +1290,14 @@ class MainActivity : Activity() {
         /** Dark ink for all (light) chrome — high contrast, no colour. */
         internal const val CHROME_INK = 0xFF222222.toInt()
 
+        /**
+         * Glyph for the chrome-reveal sliver. A magnifier reads as "type an address /
+         * search" — the sliver's primary role now that a tap reveals AND focuses the
+         * address bar. (Simple BMP glyph, not an emoji, so it renders crisp in e-ink
+         * grayscale; verify on-device and swap if the device font lacks it.)
+         */
+        private const val ADDRESS_GLYPH = "⌕"
+
         /** Height (dp) of the bottom-of-strip sliver action button. */
         private const val SLIVER_H = 56
 
@@ -1288,6 +1357,12 @@ class MainActivity : Activity() {
                 // out-of-process extension can silently downgrade blocking to
                 // observe-only, which defeats the media network-block.
                 .extensionsProcessEnabled(false)
+                // HTTPS-only: upgrade http:// and show Gecko's interstitial rather
+                // than silently loading plaintext. A portable e-ink reader roams onto
+                // hostile/open Wi-Fi, so a passive-MITM plaintext load is a real threat
+                // (cf. the 2026-07-15 DNS incident). User can still proceed per-site via
+                // the interstitial.
+                .allowInsecureConnections(GeckoRuntimeSettings.HTTPS_ONLY)
                 .build()
             return GeckoRuntime.create(activity.applicationContext, settings)
         }

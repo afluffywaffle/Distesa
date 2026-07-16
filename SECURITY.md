@@ -80,14 +80,15 @@ GeckoView gives plumbing via `Autocomplete.StorageDelegate` (`onLoginSave`/`onLo
       invariant if the allowlist logic changes).
 
 ## Engine surface & runtime posture (audited 2026-07-15)
-- [ ] **Content `PermissionDelegate` missing** — no `GeckoSession.PermissionDelegate` is set,
-      so geolocation / camera / mic / notifications / autoplay requests are unhandled. Add a
-      delegate that **denies by default** (or prompts). Distinct from the extension delegate.
-- [ ] **HTTPS-only mode** — nothing enforces HTTPS. Enable HTTPS-only + a plaintext warning
-      (portable device on hostile Wi-Fi = real MITM threat; cf. the 2026-07-15 DNS incident).
-- [ ] **Safe Browsing explicit** — only ETP/anti-tracking is configured; `ContentBlocking.
-      SafeBrowsing` is untouched (likely default-on). Set it explicitly so a refactor can't
-      silently drop malware/phishing blocking.
+- [x] **Content `PermissionDelegate`** — `DenyPermissionDelegate` set on the session
+      (`MainActivity.kt`): geo/cam/mic/notifications denied by default, media + Android
+      permission requests rejected. Done 2026-07-16.
+- [x] **HTTPS-only mode** — runtime built with `allowInsecureConnections(HTTPS_ONLY)`; Gecko
+      shows its interstitial on plaintext instead of silently loading. User can still proceed
+      per-site. Done 2026-07-16.
+- [x] **Safe Browsing explicit** — `cb.setSafeBrowsing(SafeBrowsing.DEFAULT)` set
+      unconditionally in `applyTrackingProtection` so an ETP refactor can't drop malware/
+      phishing blocking. Done 2026-07-16.
 - [ ] **Extension process isolation** — `extensionsProcessEnabled(false)`: extensions run in
       the MAIN process. Fine for pinned uBlock; **revisit (enable isolation) before allowing
       user-installed extensions** — untrusted extension in main process = large blast radius.
