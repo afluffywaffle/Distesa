@@ -55,6 +55,11 @@ rules, DNS diagnosis. **Read it first for any future Supernote work.**
 **Open / next:**
 - Verify on the **Nomad** (bottom-chrome by default — the IME poll + hidden-API should
   behave the same; confirm `getInputMethodWindowVisibleHeight` returns non-negative there).
+- **Security: work down `SECURITY.md`** — expanded this session into three checklists
+  (app-surface, engine-surface audit, zero-day/n-day posture). `allowBackup=false` done.
+  Highest-leverage item = a **GeckoView update cadence**; real gaps found = **no content
+  PermissionDelegate** (geo/cam/mic unhandled) and **no HTTPS-only mode**. A pillar, not
+  urgent for dev builds, but do it down the list.
 - **Page-flip distance calibration (NEW backlog):** the paging strip currently advances
   ~a FULL screen per push, which is jarring. Try advancing **~75% of the screen** (a
   25% overlap band) so the reader keeps context between flips. Needs on-device testing;
