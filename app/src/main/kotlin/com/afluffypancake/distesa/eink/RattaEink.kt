@@ -2,6 +2,7 @@ package com.afluffypancake.distesa.eink
 
 import android.content.Context
 import android.util.Log
+import java.lang.reflect.Method
 
 /**
  * Thin reflection wrapper around android.os.EinkManager — the Ratta (Supernote)
@@ -20,6 +21,7 @@ internal object RattaEink {
     private const val SERVICE = "eink"
 
     @Volatile private var manager: Any? = null
+    @Volatile private var fullFrameMethod: Method? = null
     @Volatile private var resolved = false
 
     fun available(context: Context): Boolean {
@@ -37,7 +39,9 @@ internal object RattaEink {
         resolve(context)
         val m = manager ?: return
         try {
-            m.javaClass.getMethod("sendOneFullFrame").invoke(m)
+            // Method resolved once in resolve(); avoids a getMethod() table walk on
+            // every full-clear (this runs inside the page-turn loop).
+            fullFrameMethod?.invoke(m)
             Log.i(TAG, "sendOneFullFrame ok")
         } catch (e: Throwable) {
             Log.w(TAG, "sendOneFullFrame: ${e.javaClass.simpleName}: ${e.message}")
@@ -54,6 +58,12 @@ internal object RattaEink {
             }
         } catch (e: Throwable) {
             Log.e(TAG, "getSystemService(eink) threw: ${e.javaClass.simpleName}: ${e.message}")
+            null
+        }
+        fullFrameMethod = try {
+            manager?.javaClass?.getMethod("sendOneFullFrame")
+        } catch (e: Throwable) {
+            Log.w(TAG, "resolve sendOneFullFrame: ${e.javaClass.simpleName}: ${e.message}")
             null
         }
     }

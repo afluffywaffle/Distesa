@@ -586,13 +586,23 @@
     // protection to Standard for this host (Strict can break sign-in). Fires at
     // DOMContentLoaded and on DOM mutations; reports once, when the port is up.
     var loginReported = false;
+    var loginObserver = null;
+    function stopLoginWatch() {
+        // Once we've reported (or decided there's nothing to report), tear the
+        // whole-document subtree observer down — otherwise its callback fires on
+        // every mutation for the life of the page (SPA/infinite-scroll = constant
+        // wakeups) with nothing left to do. Pure battery drain on e-ink.
+        if (loginObserver) { try { loginObserver.disconnect(); } catch (e) {} loginObserver = null; }
+    }
     function checkLogin() {
-        if (loginReported || !port) return;
+        if (loginReported) { stopLoginWatch(); return; }
+        if (!port) return;
         try {
             if (document.querySelector('input[type="password"]')) {
                 port.postMessage({ type: "loginHost", host: HOST });
                 loginReported = true;
                 log("login host reported: " + HOST);
+                stopLoginWatch();
             }
         } catch (e) { log("checkLogin failed: " + e); }
     }
@@ -602,9 +612,19 @@
             document.addEventListener("DOMContentLoaded", checkLogin);
         }
         try {
-            new MutationObserver(function () { checkLogin(); })
-                .observe(document.documentElement, { childList: true, subtree: true });
+            loginObserver = new MutationObserver(function () { checkLogin(); });
+            loginObserver.observe(document.documentElement, { childList: true, subtree: true });
         } catch (e) { log("login observer failed: " + e); }
+        // Stop watching once the page has settled — a password field present after
+        // load has been seen; one appearing later is rare and not worth a lifelong
+        // observer. Belt-and-suspenders with the report-time disconnect above.
+        if (document.readyState === "loading") {
+            document.addEventListener("DOMContentLoaded", function () {
+                setTimeout(stopLoginWatch, 3000);
+            });
+        } else {
+            setTimeout(stopLoginWatch, 3000);
+        }
     }
 
     function cyclePolicy() {

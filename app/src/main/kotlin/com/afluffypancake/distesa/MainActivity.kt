@@ -13,7 +13,7 @@ import android.os.SystemClock
 import android.text.InputType
 import android.util.Log
 import android.view.Gravity
-import android.view.MotionEvent
+import android.view.WindowInsets
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
@@ -84,6 +84,14 @@ class MainActivity : Activity() {
     private var searchEngine = "DuckDuckGo"
     private var leftStrip: EdgeNavView? = null
     private var rightStrip: EdgeNavView? = null
+
+    // Edge-sliver action slots: a small button at the bottom of each nav strip,
+    // ALWAYS drawn (independent of showZones) so there is always a way to surface
+    // chrome. Values: "chrome" (reveal toolbar) | "collapse" (flip placeholders) |
+    // "none". A load-time guard forces at least one slot to "chrome" so the user can
+    // never lock themselves out of the toolbar. "favorites" is reserved for later.
+    private var edgeSlotLeft = "chrome"
+    private var edgeSlotRight = "collapse"
 
     // E-ink performance levers (persisted in SharedPreferences; see loadSettings()).
     private var animOff = true          // inject animation/transition-killing CSS
@@ -157,20 +165,10 @@ class MainActivity : Activity() {
 
         val edge = if (chromeAtBottom) Gravity.BOTTOM else Gravity.TOP
 
-        // Default state = NOTHING but the page. All chrome hides; a tap in the page
-        // area OFF the chrome edge dismisses it (dispatchTouchEvent lets the page
-        // still receive that tap).
-        val root = object : FrameLayout(this) {
-            override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-                if (ev.actionMasked == MotionEvent.ACTION_DOWN &&
-                    chromeBar.visibility == View.VISIBLE && !pointInPanel(ev) &&
-                    (if (chromeAtBottom) ev.y < chromeBar.top else ev.y > chromeBar.bottom)
-                ) {
-                    hideChrome()
-                }
-                return super.dispatchTouchEvent(ev)
-            }
-        }
+        // Default state = NOTHING but the page. Chrome is summoned/dismissed only via
+        // the edge sliver (or the idle timer); a page tap NEVER moves it, so a lifted
+        // consent banner can't shift out from under the user's finger mid-tap.
+        val root = FrameLayout(this)
         // Light background so the INSET paging margins (revealed when the GeckoView
         // is narrowed) read as white page-margin, never a dark band. Honors the
         // "no dark chrome" rule.
@@ -192,43 +190,24 @@ class MainActivity : Activity() {
         // Paging strips (native EdgeNavView). Bottom-weighted; tap = flip.
         addStrips(root, stripW)
 
-        // Reveal tap-strip: only the CENTER ~40% width at the chosen edge, so a tap
-        // there never collides with the bottom-weighted SIDE paging lanes. Added
-        // BELOW the chrome bar in z-order so it only catches taps while chrome is
-        // hidden (the bar, on top, owns taps when visible).
-        val revealStrip = View(this).apply { setOnClickListener { toggleChrome() } }
-        root.addView(
-            revealStrip,
-            FrameLayout.LayoutParams(
-                (resources.displayMetrics.widthPixels * 0.40f).toInt(), dp(48),
-                edge or Gravity.CENTER_HORIZONTAL,
-            ),
-        )
-        // Visible reveal HANDLE — a thin light notch centered on the edge so the
-        // reveal target is discoverable. Non-clickable: taps fall to the strip.
-        val handle = View(this).apply {
-            background = GradientDrawable().apply {
-                cornerRadius = dp(3).toFloat()
-                setColor(Color.rgb(190, 190, 190))
-            }
-            isClickable = false
-        }
-        root.addView(
-            handle,
-            FrameLayout.LayoutParams(dp(44), dp(5), edge or Gravity.CENTER_HORIZONTAL).apply {
-                topMargin = if (chromeAtBottom) 0 else dp(6)
-                bottomMargin = if (chromeAtBottom) dp(6) else 0
-            },
-        )
+        // The chrome-reveal affordance now lives in the edge slivers (bottom of each
+        // nav strip, added by addStrips) — freeing the bottom CENTRE, where consent
+        // banners put their buttons, so those stay tappable. There is deliberately no
+        // tap-page-to-dismiss: chrome hides via its sliver toggle or the idle timer.
 
-        // Chrome bar (hidden by default) at the adaptive edge, ABOVE the reveal
-        // strip so its controls (URL field etc.) receive taps when it's showing.
+        // Chrome bar (hidden by default) at the adaptive edge. Inset horizontally by
+        // the strip width on each side that has a strip, so the bar sits BETWEEN the
+        // strips and never overlaps their bottom edge slivers (☰/⊟) — those stay
+        // visible and tappable (☰ toggles the bar closed) while chrome is up.
         chromeBar = buildChromeBar()
         root.addView(
             chromeBar,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, edge,
-            ),
+            ).apply {
+                if (navPlacement != "right") leftMargin = stripW
+                if (navPlacement != "left") rightMargin = stripW
+            },
         )
 
         // Settings panel (hidden until ⚙). Sits just inside the chrome edge.
@@ -244,6 +223,17 @@ class MainActivity : Activity() {
         )
         setContentView(root)
 
+        // Keep the chrome bar sitting just above the on-screen input window while the
+        // address field is focused. windowSoftInputMode=adjustNothing means the system
+        // won't move anything for us, so we read the live IME inset and lift the bar by
+        // exactly that height (adapts to any keyboard/panel; see liftChromeForIme).
+        root.setOnApplyWindowInsetsListener { v, insets ->
+            val imeBottom = insets.getInsets(WindowInsets.Type.ime()).bottom
+            Log.i(TAG, "[eink-ime] inset=$imeBottom urlFocus=${::urlField.isInitialized && urlField.hasFocus()}")
+            liftChromeForIme(if (::urlField.isInitialized && urlField.hasFocus()) imeBottom else 0)
+            v.onApplyWindowInsets(insets)
+        }
+
         session.loadUri(TEST_URL)
 
         ensureUBlock(runtime)
@@ -256,18 +246,52 @@ class MainActivity : Activity() {
         leftStrip = null
         rightStrip = null
         if (navPlacement != "right") {
-            leftStrip = EdgeNavView(this, showZones, onNext = { flipPage("next") }, onPrev = { flipPage("prev") })
-            root.addView(
-                leftStrip,
-                FrameLayout.LayoutParams(stripW, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.START),
-            )
+            leftStrip = addStrip(root, stripW, Gravity.START, edgeSlotLeft)
         }
         if (navPlacement != "left") {
-            rightStrip = EdgeNavView(this, showZones, onNext = { flipPage("next") }, onPrev = { flipPage("prev") })
-            root.addView(
-                rightStrip,
-                FrameLayout.LayoutParams(stripW, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.END),
-            )
+            rightStrip = addStrip(root, stripW, Gravity.END, edgeSlotRight)
+        }
+    }
+
+    /**
+     * One paging strip plus its optional bottom sliver button. When [slot] is an
+     * action (not "none"), the EdgeNavView is shortened by [SLIVER_H] so its paging
+     * zone ends above the sliver, and a small always-visible button is placed in the
+     * freed space. The sliver is drawn regardless of [showZones] — it's the guaranteed
+     * way to reach the toolbar.
+     */
+    private fun addStrip(root: FrameLayout, stripW: Int, side: Int, slot: String): EdgeNavView {
+        val hasSliver = slot != "none"
+        val sliverPx = dp(SLIVER_H)
+        val strip = EdgeNavView(this, showZones, onNext = { flipPage("next") }, onPrev = { flipPage("prev") })
+        root.addView(
+            strip,
+            FrameLayout.LayoutParams(stripW, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.BOTTOM or side).apply {
+                if (hasSliver) bottomMargin = sliverPx // keep paging taps off the sliver
+            },
+        )
+        if (hasSliver) root.addView(makeSliverButton(slot), FrameLayout.LayoutParams(stripW, sliverPx, Gravity.BOTTOM or side))
+        return strip
+    }
+
+    /** The little bottom-of-strip action button (chrome reveal / collapse toggle). */
+    private fun makeSliverButton(slot: String): Button {
+        val glyph = when (slot) {
+            "collapse" -> if (imagesCollapsed) "⊞" else "⊟"
+            else -> "☰" // chrome
+        }
+        return Button(this).apply {
+            text = glyph
+            setTextColor(Color.rgb(150, 150, 150)) // faint light ink, matches chevrons
+            setBackgroundColor(Color.TRANSPARENT)
+            setPadding(0, 0, 0, 0)
+            textSize = 20f
+            setOnClickListener {
+                when (slot) {
+                    "collapse" -> { onToggleCollapse(); text = if (imagesCollapsed) "⊞" else "⊟" }
+                    else -> toggleChrome()
+                }
+            }
         }
     }
 
@@ -279,13 +303,6 @@ class MainActivity : Activity() {
         } catch (e: Throwable) {
             Log.w(TAG, "flipPage post threw ${e.javaClass.simpleName}: ${e.message}")
         }
-    }
-
-    /** True if the touch lands inside the (open) settings panel — don't dismiss then. */
-    private fun pointInPanel(ev: MotionEvent): Boolean {
-        if (!::settingsPanel.isInitialized || settingsPanel.visibility != View.VISIBLE) return false
-        return ev.x >= settingsPanel.left && ev.x <= settingsPanel.right &&
-            ev.y >= settingsPanel.top && ev.y <= settingsPanel.bottom
     }
 
     // --- Minimal navigation chrome ------------------------------------------
@@ -323,9 +340,14 @@ class MainActivity : Activity() {
                 if (actionId == EditorInfo.IME_ACTION_GO) { submitUrl(text.toString()); true } else false
             }
             // Focus pins the chrome open indefinitely so the user can type; losing
-            // focus restarts the generous idle timer.
+            // focus restarts the generous idle timer. On focus we also lift the whole
+            // bar to the TOP edge: the Supernote's on-screen input / handwriting panel
+            // is a bottom overlay that doesn't resize the window, so a bottom-anchored
+            // address bar (and its suggestions) gets covered. Top-edge entry is clear
+            // of it. Restored to the configured edge on blur.
             setOnFocusChangeListener { _, hasFocus ->
-                if (hasFocus) ui.removeCallbacks(autoHide) else scheduleAutoHide()
+                if (hasFocus) ui.removeCallbacks(autoHide)
+                else { liftChromeForIme(0); scheduleAutoHide() }
             }
         }
         val reloadBtn = Button(this).apply {
@@ -386,8 +408,25 @@ class MainActivity : Activity() {
         scheduleAutoHide()
     }
 
+    /**
+     * Lift the (bottom-edge) chrome bar by [imeBottomPx] so it sits JUST ABOVE the
+     * on-screen input window — the Supernote handwriting panel and its autocomplete
+     * strip live inside one bottom-docked IME window, so its inset height is exactly
+     * the gap we need. Driven by the window-insets listener with the live IME height,
+     * so it adapts to any keyboard on any device (Nomad panel, Manta keyboard) with
+     * no hardcoded sizes. No-op when chrome is top-anchored (IME can't cover it there).
+     */
+    private fun liftChromeForIme(imeBottomPx: Int) {
+        if (!chromeAtBottom || !::chromeBar.isInitialized) return
+        val lp = chromeBar.layoutParams as? FrameLayout.LayoutParams ?: return
+        if (lp.bottomMargin == imeBottomPx) return
+        lp.bottomMargin = imeBottomPx
+        chromeBar.layoutParams = lp
+    }
+
     private fun hideChrome() {
         ui.removeCallbacks(autoHide)
+        liftChromeForIme(0) // drop any IME lift so the next reveal sits at the edge
         chromeBar.visibility = View.GONE
         settingsPanel.visibility = View.GONE
         applyChromeInset(false)
@@ -464,6 +503,12 @@ class MainActivity : Activity() {
         collapseMode = prefs.getString("collapseMode", "auto") ?: "auto"
         collapseThreshold = prefs.getInt("collapseThreshold", 6)
         collapseBtnPlacement = prefs.getString("collapseBtnPlacement", "chrome") ?: "chrome"
+        edgeSlotLeft = prefs.getString("edgeSlotLeft", "chrome") ?: "chrome"
+        edgeSlotRight = prefs.getString("edgeSlotRight", "collapse") ?: "collapse"
+        // Lockout guard: with tap-to-dismiss and the centre reveal-strip gone, the
+        // sliver is the ONLY way to open the toolbar. If the user cleared it from
+        // both slots, force the left one back to chrome.
+        if (edgeSlotLeft != "chrome" && edgeSlotRight != "chrome") edgeSlotLeft = "chrome"
         chromeAtBottom = computeChromeAtBottom()
     }
 
@@ -486,7 +531,9 @@ class MainActivity : Activity() {
         if (host.isNullOrEmpty()) return false
         val h = host.lowercase()
         if (loginHosts.contains(h)) return true
-        return AUTH_ALLOWLIST.any { h == it || h.endsWith(".$it") || h.endsWith(it) }
+        // Label-boundary match only: "evil-github.com" must NOT match "github.com".
+        // (A bare endsWith would relax tracking protection for look-alike domains.)
+        return AUTH_ALLOWLIST.any { h == it || h.endsWith(".$it") }
     }
 
     /**
@@ -545,7 +592,8 @@ class MainActivity : Activity() {
                 setStroke(dp(2), 0xFF555555.toInt())
                 cornerRadius = dp(10).toFloat()
             }
-            elevation = dp(6).toFloat()
+            // No elevation: on e-ink a drop shadow renders as a grey halo. The 2px
+            // border already defines the surface. (E-ink rule: flat, no shadows.)
             setPadding(dp(16), dp(12), dp(16), dp(12))
             visibility = View.GONE
         }
@@ -580,12 +628,13 @@ class MainActivity : Activity() {
         return panel
     }
 
-    private fun makeSwitch(label: String, initial: Boolean, onChange: (Boolean) -> Unit): SwitchCompat {
-        return SwitchCompat(this).apply {
-            text = label
-            setTextColor(CHROME_INK)
-            isChecked = initial
-            setOnCheckedChangeListener { _, isChecked -> onChange(isChecked) }
+    /** Boolean row as an explicit ☑/☐ + ON/OFF glyph — legible on grayscale e-ink
+     *  where a SwitchCompat thumb/tint is not. Matches SettingsActivity. */
+    private fun makeSwitch(label: String, initial: Boolean, onChange: (Boolean) -> Unit): Button {
+        var state = initial
+        fun render(): String = (if (state) "☑  " else "☐  ") + label + (if (state) "   · ON" else "   · OFF")
+        return makeButton(render()) {}.apply {
+            setOnClickListener { state = !state; text = render(); onChange(state) }
         }
     }
 
@@ -968,6 +1017,9 @@ class MainActivity : Activity() {
 
         /** Dark ink for all (light) chrome — high contrast, no colour. */
         internal const val CHROME_INK = 0xFF222222.toInt()
+
+        /** Height (dp) of the bottom-of-strip sliver action button. */
+        private const val SLIVER_H = 56
 
         /** Built-in search engines (query templates, %s = encoded query). */
         internal val SEARCH_ENGINES = linkedMapOf(

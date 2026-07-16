@@ -40,6 +40,8 @@ class SettingsActivity : Activity() {
     private var fullEvery = 6
     private var collapseMode = "auto"
     private var collapseThreshold = 6
+    private var edgeSlotLeft = "chrome"
+    private var edgeSlotRight = "collapse"
 
     private var ublock: WebExtension? = null
     private var ublockBusy = false
@@ -58,6 +60,8 @@ class SettingsActivity : Activity() {
         fullEvery = prefs.getInt("fullEvery", 6)
         collapseMode = prefs.getString("collapseMode", "auto") ?: "auto"
         collapseThreshold = prefs.getInt("collapseThreshold", 6)
+        edgeSlotLeft = prefs.getString("edgeSlotLeft", "chrome") ?: "chrome"
+        edgeSlotRight = prefs.getString("edgeSlotRight", "collapse") ?: "collapse"
 
         title = "Distesa settings"
 
@@ -67,13 +71,23 @@ class SettingsActivity : Activity() {
         }
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = GradientDrawable().apply {
-                setColor(0xFFFAFAFA.toInt())
-                setStroke(dp(2), 0xFF555555.toInt())
-                cornerRadius = dp(10).toFloat()
-            }
+            // No bordered card here: this is a full PAGE (the ScrollView already owns
+            // the white surface), unlike the floating quick-panel which needs a border
+            // to separate it from the page behind it. Flat page = the e-ink default.
             setPadding(dp(16), dp(12), dp(16), dp(12))
         }
+
+        // Explicit exit — this Activity runs under a NoActionBar theme and the
+        // Supernote shell hides the system back button, so without this the page is
+        // a dead end. Also handled via onBackPressed for the hardware/gesture back.
+        panel.addView(Button(this).apply {
+            text = "‹ Done"
+            setTextColor(0xFF222222.toInt())
+            setBackgroundColor(Color.TRANSPARENT)
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            textSize = 18f
+            setOnClickListener { finish() }
+        })
 
         panel.addView(header("Search"))
         panel.addView(makeCycleRow({ "Search engine: $searchEngine" }) {
@@ -125,10 +139,16 @@ class SettingsActivity : Activity() {
         panel.addView(makeSwitch("Show tap zones", showZones) { on ->
             showZones = on; prefs.edit().putBoolean("showZones", on).apply()
         })
-        // Collapse-button placement is scaffolded in MainActivity but has no working
-        // alternate yet — show a disabled row so the intent is visible.
-        panel.addView(makeButton("Collapse button: Chrome bar (more coming soon)") {}.apply {
-            isEnabled = false
+        // Edge slivers: a button at the bottom of each nav strip, always visible even
+        // with tap zones off. One is normally "chrome" (the only way to open the
+        // toolbar); a load-time guard keeps at least one slot on chrome.
+        panel.addView(makeCycleRow({ "Left edge button: ${slotLabel(edgeSlotLeft)}" }) {
+            edgeSlotLeft = nextSlot(edgeSlotLeft)
+            prefs.edit().putString("edgeSlotLeft", edgeSlotLeft).apply()
+        })
+        panel.addView(makeCycleRow({ "Right edge button: ${slotLabel(edgeSlotRight)}" }) {
+            edgeSlotRight = nextSlot(edgeSlotRight)
+            prefs.edit().putString("edgeSlotRight", edgeSlotRight).apply()
         })
 
         panel.addView(header("Extensions"))
@@ -151,13 +171,24 @@ class SettingsActivity : Activity() {
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
-    private fun makeSwitch(label: String, initial: Boolean, onChange: (Boolean) -> Unit): SwitchCompat =
-        SwitchCompat(this).apply {
-            text = label
-            setTextColor(MainActivity.CHROME_INK)
-            isChecked = initial
-            setOnCheckedChangeListener { _, isChecked -> onChange(isChecked) }
+    /**
+     * A boolean row rendered as an explicit checkbox glyph + ON/OFF text, NOT a
+     * SwitchCompat — on grayscale e-ink a switch's thumb position and tint are hard
+     * to read, so state was ambiguous. ☑ / ☐ + word is unambiguous with no colour.
+     */
+    private fun makeSwitch(label: String, initial: Boolean, onChange: (Boolean) -> Unit): Button {
+        var state = initial
+        fun render(): String = (if (state) "☑  " else "☐  ") + label + (if (state) "   · ON" else "   · OFF")
+        return makeButton(render()) {}.apply {
+            text = render()
+            textSize = 16f
+            setOnClickListener {
+                state = !state
+                text = render()
+                onChange(state)
+            }
         }
+    }
 
     private fun makeButton(label: String, onClick: () -> Unit): Button =
         Button(this).apply {
@@ -177,6 +208,16 @@ class SettingsActivity : Activity() {
 
     private fun cadenceLabel(): String =
         "Full-clear: " + if (fullEvery <= 0) "Off" else fullEvery.toString()
+
+    /** Edge-sliver slot cycle. "favorites" is reserved for a future feature. */
+    private fun nextSlot(slot: String): String =
+        when (slot) { "chrome" -> "collapse"; "collapse" -> "none"; else -> "chrome" }
+
+    private fun slotLabel(slot: String): String = when (slot) {
+        "chrome" -> "☰ Toolbar"
+        "collapse" -> "⊟ Collapse"
+        else -> "None"
+    }
 
     // --- uBlock on/off (self-contained; drives the shared runtime) -----------
 
