@@ -9,76 +9,107 @@ _Updated 2026-07-15_
 
 **Project:** Distesa — minimal e-ink web browser for Supernote Nomad/Manta (GeckoView).
 Formerly "Achroma". Local path `~/Develop/Achroma` (folder NOT renamed). Public repo:
-**https://github.com/afluffywaffle/Distesa**. HEAD `efe5e70`.
+**https://github.com/afluffywaffle/Distesa**. HEAD `9d57737`.
 
 ### What this session did & why
-Polished Phase-1 UX on real hardware (Nomad over wifi `adb connect 100.67.164.61:5555`,
-pkg now `com.afluffypancake.distesa.dev`), then did trademark clearance and renamed the app.
+Started by testing the element **zapper** on-device (the prior open task), then turned
+into a UX/e-ink polish + bug-fix pass driven by live on-device use.
 
-Shipped, in order (all committed + pushed, all verified on-device unless noted):
-1. **Fixed dark UI** — light inset paging margins (root bg white); transparent toolbar
-   buttons (were dark-on-dark, unreadable). Hard rule: ALL chrome light, NO animations.
-2. **Collapsible placeholders** — hidden media renders as tiny inline chips (not big boxes);
-   page-level `⊞`/`⊟` toggle in chrome. Later auto-driven (see settings).
-3. **Chrome viewport shift** — when the (bottom) chrome shows, the GeckoView insets by the
-   bar height so fixed consent/GDPR banners aren't covered → tappable.
-4. **Bordered settings panel** — was borderless (the layuv problem); now stroke+radius.
-5. **Video autoplay guard** — overrides `HTMLMediaElement.play` at document_start so JS/MSE
-   players can't autoplay (network `media` block misses XHR/blob segments). Tapping a video
-   placeholder marks its element allowed.
-6. **Social-embed gating** — X/Twitter, IG, FB, TikTok, Reddit embeds → "Tap to load post"
-   placeholder (ETP blocks tracker *requests* but doesn't hide embed iframes).
-7. **Settings architecture** (delegated) — new `SettingsActivity` (full settings) + trimmed
-   quick panel (Toolbar pos, Animations, Images, Zap, "More settings…"). Auto-collapse mode
-   {always,never,auto} default **auto**, threshold **6**. `collapseBtnPlacement` pref scaffolded.
-8. **Element zapper** — quick-panel "⬡ Zap element": arms picker, next page tap hides that
-   element `display:none!important`, persists an nth-of-type selector per host (`_hide::<host>`),
-   re-applied on load + via MutationObserver. The only way to kill inline `<div>` JS players
-   (e.g. Newsweek `VideoContentHub`) with no src to match. **NOT yet tested on-device.**
-9. **docs/tuning.md** — two tables (lever→loading-effect; lever→breakage-guard), linked in README.
-10. **Rename Achroma→Distesa** — trademark clearance came back **RED** (≥2 live Class-9 apps
-    named exactly "Achroma": Realm Runner card game + "Achroma Lens"; all good domains taken;
-    "-chroma" space policed by Archroma/EnChroma). User picked **Distesa** (Italian "an expanse")
-    over Liath. Renamed repo + package `com.afluffypancake.distesa` + applicationId `.distesa.dev`
-    + extension id `eink@distesa` + label + docs/comments.
+Shipped (committed; `88c87ba` zapper, `9d57737` the rest):
+1. **Zapper undo/reset** — quick-panel "↺ Undo last zap" + "Reset zaps (this site)".
+   Mutate the stored `_hide::<host>` list + reload (hides are only display:none, so a
+   reload restores). **Zapper verified on Nomad**: one tap grabbed `#nw-video-player`
+   by stable id; undo/reset both restored. (Newsweek VideoContentHub.)
+2. **Edge-sliver buttons** — a button at the bottom of each nav strip (left=☰ Toolbar
+   reveal, right=⊟ Collapse by default), always drawn even with tap-zones off. Paging
+   zone shrinks above the sliver. Per-side configurable in Settings (chrome/collapse/
+   none); guard forces ≥1 slot to chrome so the toolbar is never unreachable. Chrome
+   bar inset by strip width so it never overlaps the corner slivers (☰ toggles closed).
+3. **GDPR/consent banner tap fix** — removed the bottom-centre reveal strip AND
+   tap-page-to-dismiss, so a page tap never un-insets the viewport and drops a lifted
+   fixed banner out from under the finger. Chrome opens/closes only via sliver or idle.
+4. **Address bar hidden by on-screen input** — `windowSoftInputMode=adjustNothing` + a
+   window-insets listener lifts the bottom chrome bar by the LIVE IME height so it sits
+   just above the handwriting/keyboard panel + its autocomplete strip. Runtime-measured
+   → adapts to any keyboard/device, no hardcoding. (IME window on Nomad = [0,1021]–
+   [1404,1872].)
+5. **Settings dead-end fix** — "‹ Done" button (Activity has NoActionBar + hidden system
+   back).
+6. **E-ink UI** — boolean settings now render as ☑/☐ + ON/OFF text rows (not SwitchCompat,
+   unreadable in grayscale); removed quick-panel drop shadow (elevation) + settings-page
+   card border (flat surfaces; shadows read as grey halos on e-ink).
+7. **Safe security+perf** (from 3 subagent audits) — dropped the boundary-less
+   `endsWith()` in the ETP allowlist (look-alike host bypass); cached RattaEink's
+   reflected `sendOneFullFrame` Method off the page-turn loop; disconnect the login
+   MutationObserver once reported.
 
 ### Key decisions
-- **Achroma abandoned (RED clearance)** → Distesa. Clearance was PRELIMINARY (USPTO/EUIPO block
-  automated access) — attorney search still advised before filing/store release.
-- **Auto-collapse default = auto/6** so text pages stay boxed, media-heavy pages collapse.
-- **Zapper via content-script picker, not native context menu** — GeckoView's onContextMenu
-  can't target a src-less `<div>` player; arm-then-tap + per-site persist chosen by user.
-- Video shell "still renders" after autoplay-kill is expected: it's empty CSS furniture (no
-  media loads); the zapper is the tool to remove it.
+- **Edge slivers over the old bottom-centre reveal** (user idea) — the centre reveal sat
+  exactly where consent-banner buttons live; moving reveal to the gutters frees the
+  centre AND kills the inset-fight. Dropped tap-to-dismiss entirely as a result.
+- **IME handling = adjustNothing + insets, not adjustResize** — the Supernote input is a
+  bottom-docked IME window; adjustResize didn't lift the bar (candidate strip popped
+  over). Reading the ime() inset at runtime and lifting the bar by it is device-agnostic.
+- **Reader-mode + ink is the future flagship** (design only, not built) — see the
+  `project-distesa-readermode-ink` memory. layuv ingests **.docx** and uses **text
+  anchors** (PS al Coda uses page coords); reader-mode article → docx → layuv annotate
+  (text-anchored, survives reflow) → annotations stored in the docx. Broaden layuv
+  ingestion to txt/rtf/md/epub(text) later.
 
-### Files changed (high level)
-- `app/src/main/kotlin/.../distesa/MainActivity.kt` — chrome inset, transparent buttons,
-  collapse button, onArmZap, panel border, onResume settings apply (agent), rename.
-- `app/src/main/kotlin/.../distesa/SettingsActivity.kt` — NEW (full settings page).
-- `app/src/main/assets/extensions/eink/images.js` — collapse mode, autoplay guard, social
-  embeds, element zapper, auto-collapse.
-- `AndroidManifest.xml`, `*.gradle.kts` — SettingsActivity, rename (namespace/applicationId).
-- `README.md`, `docs/tuning.md` — NEW tuning doc + rename.
+### Files changed
+- `MainActivity.kt` — edge slivers (addStrip/makeSliverButton, SLIVER_H, edgeSlot prefs
+  + lockout guard), chrome bar inset by stripW, removed reveal strip + tap-to-dismiss +
+  pointInPanel, `liftChromeForIme` + window-insets listener, ☑/☐ makeSwitch, allowlist
+  endsWith fix. (MotionEvent import → WindowInsets.)
+- `SettingsActivity.kt` — "‹ Done" button, ☑/☐ makeSwitch, edge-slot cycle rows
+  (slotLabel/nextSlot), removed card border.
+- `AndroidManifest.xml` — windowSoftInputMode adjustNothing (MainActivity).
+- `eink/RattaEink.kt` — cache reflected Method.
+- `assets/extensions/eink/images.js` — zapper undo/reset (undoZap/resetZaps) + login
+  observer disconnect.
 
-### Open / next steps
-- **Test the zapper on-device** (never tried) — esp. Newsweek `VideoContentHub`. Report whether
-  one tap grabs the right container or needs re-zapping → decide if "grab sensible container"
-  smarts are needed.
-- **Auto-collapse threshold feel** — is ~6 right?
-- **`recreate()` flash** on structural settings (toolbar pos, nav style/side) — move to live
-  re-layout if it bugs on e-ink.
-- Optional: rename local folder `~/Develop/Achroma` → `Distesa` (left as-is; changes path).
-- Deferred earlier: on-device verify of login-relax + icon-font exception on real login/FA sites;
-  cold heavy-page benchmark.
+### Open / next steps (verify on MANTA next, then Nomad)
+- **Manta ADB**: USB serial `SN100C10008955`, WiFi `192.168.12.185:5555` (per layuv
+  `reference_supernote_device` memory). Needs `adb -s SN100C10008955 shell settings put
+  global hidden_api_policy 0` for the EPD reflection. Build with Android Studio JBR.
+- **GOTCHA — IME fix won't exercise on Manta**: Manta is 10.7" (>9") so `chromeAtBottom`
+  is FALSE → chrome anchors TOP, and `liftChromeForIme` is a no-op (IME can't cover a top
+  bar). So Manta validates the top-chrome case; the **IME-lift needs the NOMAD** (bottom
+  chrome). On Nomad, type in the address bar and confirm `[eink-ime] inset=<non-zero>` in
+  logcat AND the bar sits just above the panel. If inset logs 0, adjustNothing isn't
+  dispatching ime insets → fall back to top-relocation (git shows the reverted approach).
+- Still to verify anywhere: banner tap no longer drops; settings Done + flat surfaces +
+  ☑/☐ rows + edge-slot config; slivers don't overlap chrome (confirmed via layout bounds
+  on Nomad, re-check visually on Manta's top-chrome layout).
+- **Deferred optimization batch #2** (safe-ish, needs retest): batch reads/writes in
+  images.js gateAll (reflow storm), coalesce media-observer gateAll, gate onResume lever
+  re-apply. **Higher-risk**: recreate()→live re-layout for showZones/navStyle, chrome
+  inset overlay mode.
+- **Deferred security** (not applied): AutoApprovePromptDelegate auto-grants add-on
+  prompts; release signed with debug keystore + no minify; login-host auto-persist lets a
+  page self-relax ETP; allowBackup=true.
 
 ### Gotchas
-- Build with Android Studio JBR: `export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"`
-  then `./gradlew :app:assembleDebug -q`. System java 26 too new.
-- Deploy over wifi is slow (~2min for ~540MB APK) — run installs in background.
-- Old `com.afluffypancake.achroma.dev` was uninstalled; current pkg `com.afluffypancake.distesa.dev`.
-- Background `console.log` invisible in logcat EXCEPT the extension's (consoleOutput(true) routes
-  `[eink-*]` tags); native diags relayed as `[eink-diag]` under tag DistesaMain.
-- zsh word-splitting: use `export ANDROID_SERIAL=...` + full-path `"$ADB"`.
+- Build: `export JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home"`
+  then `./gradlew :app:assembleDebug`. System java too new. ~540MB APK, wifi install ~2min.
+- Delegate the Gradle build to a cheap subagent (returns pass/fail only) — keeps the
+  compile log out of the main context.
+- Nomad pkg `com.afluffypancake.distesa.dev`. SettingsActivity is `exported=false` — can't
+  `am start` it from adb; reach it via ⚙ quick panel → "More settings…".
+- 7s chrome auto-hide makes screenshot-driven multi-tap navigation flaky; use uiautomator
+  dump for exact button bounds when driving.
+- Extension `log()` routes to logcat as `[eink-*]`; native diags as `[eink-diag]`/
+  `[eink-ime]` under tag DistesaMain.
 
 ### Next session — paste this to start
-See the copy-paste block in the chat / below.
+> Resume **Distesa**, thread **phase1** (repo ~/Develop/Achroma, HEAD `9d57737`). Last
+> session shipped edge-sliver chrome buttons, an IME-aware address bar, a GDPR banner-tap
+> fix, e-ink UI polish, and safe security/perf fixes — all committed but **not yet
+> verified on-device** (paused to change locations). Read `HANDOFF.md` → `## Thread:
+> phase1` and the `handoff_phase1` memory. First task: **on-device verification**. Start
+> on the **Manta** (USB serial `SN100C10008955`, wifi `192.168.12.185:5555`; needs `adb
+> shell settings put global hidden_api_policy 0`) — but note the **IME-lift fix needs the
+> Nomad** (Manta is >9" so chrome anchors top and the fix is a no-op there): on Nomad,
+> type in the address bar and confirm `[eink-ime] inset=<non-zero>` in logcat AND the bar
+> sits just above the panel; if inset logs 0, fall back to top-relocation. Also verify:
+> banner tap doesn't drop, settings Done + flat surfaces + ☑/☐ rows, edge-slot config.
