@@ -42,6 +42,12 @@
     // iframes we treat as video embeds (gated DOM-side).
     var VIDEO_EMBED_RE = /(youtube(-nocookie)?\.com|youtu\.be|player\.vimeo\.com|dailymotion\.com|streamable\.com|twitch\.tv|players\.brightcove|wistia)/i;
 
+    // Social embeds (tweets/X posts, IG, FB, TikTok, Reddit) arrive as sub_frames
+    // too. Tracking protection blocks tracker *requests* by category but doesn't
+    // hide an embed's own iframe, so we gate these behind a "Tap to load post"
+    // placeholder — the element-hiding uBlock would do, without bundling uBlock.
+    var SOCIAL_EMBED_RE = /(platform\.(twitter|x)\.com|syndication\.twitter\.com|\/\/(twitter|x)\.com\/|instagram\.com\/(p|reel|tv|embed)|facebook\.com\/plugins|tiktok\.com\/embed|embed\.reddit|redditmedia)/i;
+
     var policy = DEFAULT_POLICY;
     var observer = null;
     var port = null;
@@ -52,6 +58,44 @@
     function log(msg) {
         try { console.log("[eink-images] " + msg); } catch (e) {}
     }
+
+    // --- Autoplay guard (document_start) ------------------------------------
+    // The network block only sees requests typed `media`; JS players (MSE/blob,
+    // e.g. news-site video) feed a <video> from blob URLs via XHR and call
+    // .play() directly, bypassing both the network block AND the stripped
+    // `autoplay` attribute. So we neuter playback at the source: override
+    // HTMLMediaElement.prototype.play to refuse unless the element is explicitly
+    // allowed, plus a capturing 'play' listener that pauses anything that slips
+    // through. Installed synchronously before page scripts run. Tapping a video
+    // placeholder marks its element allowed (dataset.einkAllow) so it can play.
+    var mediaAllowAll = false; // set true only under the load-all policy
+    function mediaAllowed(el) {
+        try { return mediaAllowAll || (el && el.dataset && el.dataset.einkAllow === "1"); }
+        catch (e) { return false; }
+    }
+    function installPlayGuard() {
+        try {
+            var proto = window.HTMLMediaElement && HTMLMediaElement.prototype;
+            if (!proto || proto.__einkGuarded) return;
+            var realPlay = proto.play;
+            proto.play = function () {
+                if (!mediaAllowed(this)) {
+                    try { this.pause && this.pause(); } catch (e) {}
+                    try { this.autoplay = false; } catch (e) {}
+                    return Promise.reject(new DOMException("blocked by Achroma", "NotAllowedError"));
+                }
+                return realPlay.apply(this, arguments);
+            };
+            proto.__einkGuarded = true;
+            document.addEventListener("play", function (ev) {
+                var el = ev.target;
+                if (el && (el.tagName === "VIDEO" || el.tagName === "AUDIO") && !mediaAllowed(el)) {
+                    try { el.pause(); } catch (e) {}
+                }
+            }, true);
+        } catch (e) { log("installPlayGuard failed: " + e); }
+    }
+    installPlayGuard();
 
     // --- Animations-off lever (settings) ------------------------------------
     // Injects a stylesheet that kills animations/transitions/smooth-scroll — all
@@ -309,6 +353,7 @@
         var urls = videoUrls(v);
         requestAllow(urls, function () {
             try {
+                v.dataset.einkAllow = "1"; // this element may now play (user tapped)
                 if (v.dataset.einkSrc) v.setAttribute("src", v.dataset.einkSrc);
                 if (v.dataset.einkPoster) v.setAttribute("poster", v.dataset.einkPoster);
                 var sources = v.querySelectorAll("source");
@@ -338,11 +383,17 @@
     function gateIframe(frame, tapLoads) {
         if (frame.dataset.einkDone) return;
         var src = frame.getAttribute("src") || frame.getAttribute("data-src") || "";
-        if (!src || !VIDEO_EMBED_RE.test(src)) return; // only known video embeds
+        var isVideo = !!src && VIDEO_EMBED_RE.test(src);
+        var isSocial = !!src && SOCIAL_EMBED_RE.test(src);
+        if (!isVideo && !isSocial) return; // only known video / social embeds
         frame.dataset.einkDone = "1";
         frame.dataset.einkSrc = src;
         frame.removeAttribute("src"); // stops the embed fetching / autoplaying
-        var ph = makePlaceholder(frame, "▶", tapLoads ? "Tap to load video" : "Video hidden");
+        var glyph = isVideo ? "▶" : "💬";
+        var full = isVideo
+            ? (tapLoads ? "Tap to load video" : "Video hidden")
+            : (tapLoads ? "Tap to load post" : "Post hidden");
+        var ph = makePlaceholder(frame, glyph, full);
         ph.addEventListener("click", function (e) {
             e.preventDefault(); e.stopPropagation();
             if (tapLoads) {
@@ -530,6 +581,7 @@
                 applyAnimOff(res._animOff !== false);            // default ON
                 if (typeof res._collapsed === "boolean") collapsed = res._collapsed; // default true
                 if (res[HOST]) policy = res[HOST];
+                if (policy === "load-all") mediaAllowAll = true; // stop gating playback
                 log("media policy for " + HOST + " = " + policy + " collapsed=" + collapsed);
                 connectNative();
                 applyPolicy();
