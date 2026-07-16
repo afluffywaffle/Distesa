@@ -362,6 +362,10 @@ class MainActivity : Activity() {
     private fun showChrome() {
         chromeBar.visibility = View.VISIBLE
         currentUrl?.let { urlField.setText(it) }
+        // Shrink the web viewport by the chrome height so the bar doesn't cover the
+        // bottom (or top) of the page — otherwise a position:fixed banner (GDPR /
+        // cookie consent) sits under the bar and its buttons can't be tapped.
+        chromeBar.post { applyChromeInset(true) }
         scheduleAutoHide()
     }
 
@@ -369,9 +373,27 @@ class MainActivity : Activity() {
         ui.removeCallbacks(autoHide)
         chromeBar.visibility = View.GONE
         settingsPanel.visibility = View.GONE
+        applyChromeInset(false)
         urlField.clearFocus()
         (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
             ?.hideSoftInputFromWindow(urlField.windowToken, 0)
+    }
+
+    /**
+     * Inset the GeckoView by the chrome bar's height on the chrome edge while it's
+     * visible, restoring to flush when hidden. Preserves the inset-mode left/right
+     * paging margins. The reflow this triggers is intentional — it lifts fixed
+     * bottom/top page furniture (consent banners) out from under the bar.
+     */
+    private fun applyChromeInset(shown: Boolean) {
+        val lp = view.layoutParams as? FrameLayout.LayoutParams ?: return
+        val inset = if (shown) chromeBar.height.coerceAtLeast(dp(52)) else 0
+        val newTop = if (chromeAtBottom) 0 else inset
+        val newBottom = if (chromeAtBottom) inset else 0
+        if (lp.topMargin == newTop && lp.bottomMargin == newBottom) return
+        lp.topMargin = newTop
+        lp.bottomMargin = newBottom
+        view.layoutParams = lp
     }
 
     /**
@@ -495,7 +517,15 @@ class MainActivity : Activity() {
     private fun buildSettingsPanel(): LinearLayout {
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xF7FAFAFA.toInt()) // light, near-white
+            // Light fill WITH a defined border — without a border the panel bleeds
+            // into a white page and its edges vanish (the layuv problem). Dark-grey
+            // 2px stroke + rounded corners so it reads as a distinct surface.
+            background = GradientDrawable().apply {
+                setColor(0xFFFAFAFA.toInt())
+                setStroke(dp(2), 0xFF555555.toInt())
+                cornerRadius = dp(10).toFloat()
+            }
+            elevation = dp(6).toFloat()
             setPadding(dp(16), dp(12), dp(16), dp(12))
             visibility = View.GONE
         }
