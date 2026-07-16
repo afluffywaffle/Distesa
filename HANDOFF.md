@@ -5,7 +5,50 @@ Threads: `phase1` (Distesa Phase-1 UI/media/settings + naming)
 ---
 
 ## Thread: phase1
-_Updated 2026-07-16 (session e)_
+_Updated 2026-07-16 (session f)_
+
+### Session 2026-07-16 (f): edge-nav icon legibility + tap-feedback resolved + arm64 debug — COMMITTED (`8898c01`)
+
+Cleared both fresh backlog items from session e, plus a build-size fix. All on the **Nomad**.
+
+**1. Globe + chevron legibility (done).** `GlobeSearchDrawable`: gave the globe the same
+white "moat" knock-out stroke the magnifier already had (moat circle/equator/meridian
+drawn first, ink on top) so it reads on dark backgrounds. Added the same moat behind the
+`EdgeNavView` chevrons. Confirmed on-device.
+
+**2. Tap-feedback highlight — RESOLVED as "no transient flash" (design decision).** First
+attempt (a heavier press outline + bolded chevron on ACTION_DOWN) was flaky: highlight
+fired inconsistently, worse on fast taps, and got stuck-on. **Root cause (diagnosed on
+Opus):** the strip is a **separate overlay surface**; on this panel a physical EPD refresh
+is only reliably driven by an `invalidate()` on the **GeckoView compositor surface** (the
+page flip: tap → `flipPage` posts `navFlip` to the eink WebExtension → content.js scrolls
+→ posts `flip` → `onFlip` → `Epd.pageTurn` → `GeckoView.invalidate()`). An overlay-only
+`invalidate()` for a press-and-revert flash has **no refresh of its own**, so its frame
+only reaches the panel when a flip refresh happens to sweep the strip region — which
+coalesces away on fast taps. Not a timing constant (three delay tweaks all failed).
+**Decision:** drop the transient flash entirely; the always-on static affordance (capsule
++ chevrons + moat) marks the zones and rides the flip refresh for free. Removed all press
+machinery (`pressedZone`, `pressedRailPaint`, `revertRunnable`, `ACK_REVERT_DELAY_MS`);
+kept swipe-vs-tap detection. Confirmed good on-device.
+
+**3. arm64-v8a-only debug builds.** `app/build.gradle.kts` debug block now sets
+`ndk.abiFilters += "arm64-v8a"`. Supernote is the **only target** (all arm64, confirmed by
+user). Cut the debug APK **515MB → 198MB** and sped up adb installs. Release still bundles
+all ABIs — open question whether release should also go single-ABI (likely yes).
+
+**New bug logged (not started):** when Chrome (address bar) is auto-focused and the user
+taps Settings, the IME does not dismiss and it hides the quick panel. Likely the
+settings-tap path isn't firing the same IME-dismiss/panel-restore hook normal nav does
+(cf. commit `6f05e0b`).
+
+**Next direction chosen by user:** native scroll + native EPD refresh to replace the
+JS-extension-driven flip — for **latency** (JS round-trip per flip) and **flip
+reliability**. Caveat captured: native scroll alone does NOT restore a per-tap strip flash
+(the strip still has no refresh trigger; serial tap→feedback→scroll costs a 2nd EPD cycle
+per turn). User wants a **scope + spike plan first (no code)**. This is the first task next
+session.
+
+---
 
 ### Session 2026-07-16 (e): nav-strip recreate lockout — DIAGNOSED, FIXED, COMMITTED (`692ee11`)
 
@@ -322,18 +365,22 @@ Shipped (committed; `88c87ba` zapper, `9d57737` the rest):
 
 ### Next session — paste this to start
 > Resume **Distesa**, thread **phase1** (repo ~/Develop/Distesa, branch `main`, tip
-> `692ee11`, unpushed). Last session diagnosed + fixed the **nav-strip recreate lockout**
-> (paging strips went dead after any settings toggle that calls `recreate()`, because
-> `einkPort` reset to null and never re-bound) and committed the whole edge-nav bundle
-> (capsule redesign + drawn globe icon + this lockout fix). Verified on the **Nomad**.
-> Read `HANDOFF.md` → `## Thread: phase1` (sessions e + d) and the `handoff_phase1`
-> memory; **also read `~/Develop/supernote-dev-reference/README.md` before any Supernote
-> work.** Device: Nomad serial `SN078C10005528` over Tailscale `100.67.164.61:5555`
-> (`hidden_api_policy` already 0); adb at `~/Library/Android/sdk/platform-tools/adb`;
-> package `com.afluffywaffle.distesa.dev`; build `./gradlew installDebug`. First task —
-> pick one of the two fresh **Sonnet-sized** backlog items: (1) **e-ink tap-feedback
-> highlight** on the nav button (brief heavier OUTLINE on ACTION_DOWN in `EdgeNavView`,
-> static stroke, no animation), or (2) **white outline on the globe sliver icon** in
-> `GlobeSearchDrawable.kt` (match the magnifier's outline so the globe reads on dark
-> backgrounds). Both are in the Open/next backlog list. Also parked: divider-length tune
-> + whether the chrome-slot guard should persist to the saved pref. Consider pushing.
+> `8898c01`, unpushed — `main` is 3 commits ahead of origin). Last session (f) cleared the
+> two edge-nav backlog items — globe+chevron white moat for dark-bg legibility, and
+> **resolved the tap-feedback highlight as "no transient flash"** (root cause: the strip is
+> a separate overlay surface with no EPD refresh of its own; only a GeckoView-surface
+> invalidate reliably refreshes this panel) — and made debug builds arm64-v8a-only
+> (515MB→198MB APK). Read `HANDOFF.md` → `## Thread: phase1` (session f) and the
+> `handoff_phase1` memory; **also read `~/Develop/supernote-dev-reference/README.md` AND
+> `Epd.kt`'s "prior approaches tried and abandoned" notes before any Supernote/refresh
+> work.** Device: Nomad serial `SN078C10005528` over Tailscale `100.67.164.61:5555`; adb at
+> `~/Library/Android/sdk/platform-tools/adb`; package `com.afluffywaffle.distesa.dev`; build
+> `./gradlew installDebug`. **First task (Opus-sized, PLAN ONLY — no code, user wants to
+> approve direction first): scope a spike plan for NATIVE scroll + native EPD refresh to
+> replace the JS-extension-driven flip.** Motivation: paging latency (JS round-trip per
+> flip) + flip reliability. Deliver: how native scroll would replace the current
+> `flipPage`→extension→`onFlip`→`Epd.pageTurn` chain, native EPD refresh options (what
+> `Epd`/`RattaEink` already know), risks, and what to prototype first. Note the caveat:
+> native scroll alone won't bring back a per-tap strip flash. Also open, not started:
+> **Chrome-focused→tap-Settings IME-doesn't-dismiss bug**; whether release should also go
+> single-ABI; parked divider-length tune + chrome-slot-guard persistence; pushing `main`.
