@@ -21,17 +21,17 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
+
+        // Distesa targets Supernote devices ONLY (Nomad/Manta), which are all
+        // arm64-v8a. Bundling GeckoView's native libs for every ABI (armeabi-v7a,
+        // x86, x86_64) is dead weight no target can use (~500MB APK, slow installs).
+        // Restrict BOTH debug and release to arm64-v8a.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
-        debug {
-            // Nomad/Manta are both arm64-v8a; unfiltered debug bundles GeckoView's
-            // native libs for every ABI (~500MB APK, slow adb install over Tailscale).
-            // Release keeps all ABIs for real distribution.
-            ndk {
-                abiFilters += "arm64-v8a"
-            }
-        }
         release {
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("debug")

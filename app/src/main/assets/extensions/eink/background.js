@@ -11,10 +11,11 @@
  *    for a privileged extension with host + webRequestBlocking permissions — the
  *    same capability uBlock Origin uses.
  *
- * 2) NATIVE RELAY (unchanged from before). GeckoView native messaging is
- *    background-only, so this page bridges the content scripts to the app:
- *      content.js flip  --sendMessage--> here --sendNativeMessage("browser")--> app.onMessage
+ * 2) NATIVE RELAY. GeckoView native messaging is background-only, so this page
+ *    bridges the images.js content script to the app:
  *      images.js  port  --connect------> here <--connectNative("browser")-----> app.onConnect
+ *    (Page paging/refresh is no longer relayed here — it moved fully native; the
+ *     app scrolls via PanZoomController and refreshes off the scroll offset.)
  *
  * MV2, vanilla JS. Robust: if webRequest blocking is unavailable we log and fall
  * back to the content script's DOM-strip behaviour, so the app still works.
@@ -271,17 +272,9 @@ function openNativePort() {
     }
 }
 
-// content.js flip -> native (fire-and-forget). Reaches app.onMessage.
-browser.runtime.onMessage.addListener(function (msg) {
-    try {
-        if (msg && msg.type === "flip") {
-            var p = browser.runtime.sendNativeMessage(NATIVE_APP, { type: "flip" });
-            if (p && p.catch) p.catch(function () {});
-        }
-    } catch (e) {
-        log("flip relay failed: " + e);
-    }
-});
+// (Page-flip relay removed: paging is now native — the app scrolls the GeckoView
+//  via PanZoomController and drives the EPD refresh off the scroll offset, so there
+//  is no longer a content-script "flip" message to relay.)
 
 // images.js port <-> native + allowlist control.
 browser.runtime.onConnect.addListener(function (port) {

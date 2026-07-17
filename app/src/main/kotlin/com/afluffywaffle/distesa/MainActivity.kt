@@ -31,6 +31,8 @@ import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoRuntimeSettings
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
+import org.mozilla.geckoview.PanZoomController
+import org.mozilla.geckoview.ScreenLength
 import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.WebExtensionController
 import com.afluffywaffle.distesa.eink.Epd
@@ -187,6 +189,7 @@ class MainActivity : Activity() {
         session.progressDelegate = PerfProgressDelegate
         session.navigationDelegate = EtpNavigationDelegate
         session.permissionDelegate = DenyPermissionDelegate
+        session.scrollDelegate = EinkScrollDelegate
 
         view = GeckoView(this)
         view.setSession(session)
@@ -364,16 +367,57 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Native strip tap → tell content.js to scroll a page (it also signals EPD). */
+    /**
+     * Native strip tap → scroll the page directly via GeckoView's PanZoomController,
+     * then drive the EPD refresh. No JS round-trip: the old path went
+     * native → einkPort(navFlip) → background.js → content.js scroll →
+     * background.js(flip) → native refresh — two WebExtension IPC hops per turn.
+     * Now we scroll natively (instant, no fling — [SCROLL_BEHAVIOR_AUTO]) by a
+     * viewport fraction and let [EinkScrollDelegate] refresh on the settled offset.
+     *
+     * scrollBy clamps silently at the content edges, so an over-scroll at top/bottom
+     * is a no-op (which fires no onScrollChanged) — hence we also arm the refresh
+     * backstop here so a page turn always produces at least one EPD refresh.
+     */
     private fun flipPage(dir: String) {
-        val p = einkPort ?: run {
-            Log.w(TAG, "flipPage: no eink port — dropped $dir")
-            return
-        }
+        if (!::session.isInitialized) return
+        val frac = if (dir == "prev") -PAGE_SCROLL_FRACTION else PAGE_SCROLL_FRACTION
         try {
-            p.postMessage(org.json.JSONObject().put("type", "navFlip").put("dir", dir))
+            session.panZoomController.scrollBy(
+                ScreenLength.zero(),
+                ScreenLength.fromVisualViewportHeight(frac),
+                PanZoomController.SCROLL_BEHAVIOR_AUTO,
+            )
+            armScrollRefresh()
         } catch (e: Throwable) {
-            Log.w(TAG, "flipPage post threw ${e.javaClass.simpleName}: ${e.message}")
+            Log.w(TAG, "flipPage scrollBy threw ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    /**
+     * Debounce a single EPD refresh onto the view: any pending refresh is cancelled
+     * and re-armed [SCROLL_SETTLE_MS] out, so the burst of onScrollChanged events one
+     * flip emits — plus the flipPage backstop — coalesce into ONE refresh on the
+     * settled frame. Safe to call from any thread that reaches the view.
+     */
+    private fun armScrollRefresh() {
+        if (!::view.isInitialized) return
+        view.removeCallbacks(scrollRefreshRunnable)
+        view.postDelayed(scrollRefreshRunnable, SCROLL_SETTLE_MS)
+    }
+
+    /** Drives the Supernote EPD refresh once a scroll has settled (see [Epd]). */
+    private val scrollRefreshRunnable = Runnable {
+        if (!::view.isInitialized) return@Runnable
+        try {
+            val fullClear = epd.pageTurn(view)
+            if (fullClear) {
+                Log.i(TAG, "flip -> EPD FULL CLEAR (every ${Epd.FULL_EVERY} turns)")
+            } else {
+                Log.i(TAG, "flip -> partial refresh")
+            }
+        } catch (e: Throwable) {
+            Log.w(TAG, "EPD refresh threw ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 
@@ -1076,7 +1120,8 @@ class MainActivity : Activity() {
                 val obj = message as? org.json.JSONObject
                 val type = obj?.optString("type") ?: message.toString()
                 when (type) {
-                    "flip" -> onFlip()
+                    // Page-flip refresh is now driven natively off the scroll offset
+                    // (EinkScrollDelegate) — no "flip" message from the extension.
                     // DIAGNOSTIC: background.js reports webRequest capability +
                     // request/cancel counters here (its own console.log doesn't
                     // reliably reach logcat), surfaced under tag DistesaMain.
@@ -1207,19 +1252,15 @@ class MainActivity : Activity() {
         else -> policy
     }
 
-    private fun onFlip() {
-        if (!::view.isInitialized) return
-        view.post {
-            try {
-                val fullClear = epd.pageTurn(view)
-                if (fullClear) {
-                    Log.i(TAG, "flip -> EPD FULL CLEAR (every ${Epd.FULL_EVERY} turns)")
-                } else {
-                    Log.i(TAG, "flip -> partial refresh")
-                }
-            } catch (e: Throwable) {
-                Log.w(TAG, "EPD refresh threw ${e.javaClass.simpleName}: ${e.message}")
-            }
+    /**
+     * The compositor scroll offset changed (our native flip, or any other scroll).
+     * Any settled scroll drives one EPD refresh — this is the ground truth that a
+     * flip actually moved the page, replacing content.js's fire-and-forget "flip"
+     * ping. Bursts are coalesced by [armScrollRefresh]'s debounce.
+     */
+    private val EinkScrollDelegate = object : GeckoSession.ScrollDelegate {
+        override fun onScrollChanged(s: GeckoSession, scrollX: Int, scrollY: Int) {
+            armScrollRefresh()
         }
     }
 
@@ -1331,7 +1372,8 @@ class MainActivity : Activity() {
         private const val TAG = "DistesaMain"
 
         /**
-         * Live port to the eink content script (images.js / navFlip target).
+         * Live native port to the eink extension background page (images.js policy
+         * pushes, settings levers). Paging no longer rides this port.
          * Process-wide (not per-activity): the GeckoRuntime + extension +
          * background page are a process-wide singleton that survives activity
          * recreate(), but onConnect only re-fires on a fresh connectNative from
@@ -1351,6 +1393,21 @@ class MainActivity : Activity() {
 
         /** Height (dp) of the bottom-of-strip sliver action button. */
         private const val SLIVER_H = 56
+
+        /**
+         * Fraction of the visual viewport a single page flip scrolls. 0.9 keeps a
+         * ~10% overlap band between consecutive pages for reading continuity.
+         * (Candidate for a user setting later; see the parked overlap-% backlog.)
+         */
+        private const val PAGE_SCROLL_FRACTION = 0.9
+
+        /**
+         * Debounce (ms) between the last scroll offset change and the EPD refresh —
+         * long enough to coalesce a flip's burst of onScrollChanged events (and the
+         * flipPage backstop) into one refresh on the settled frame. Instant
+         * (SCROLL_BEHAVIOR_AUTO) scrolls settle within a frame or two.
+         */
+        private const val SCROLL_SETTLE_MS = 48L
 
         /** Built-in search engines (query templates, %s = encoded query). */
         internal val SEARCH_ENGINES = linkedMapOf(
