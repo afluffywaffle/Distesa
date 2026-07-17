@@ -81,7 +81,7 @@ class MainActivity : Activity() {
 
     // Navigation/paging + chrome levers (persisted).
     private var navStyle = "inset"       // "inset" (narrow the page) | "overlay"
-    private var navPlacement = "both"    // "both" | "left" | "right"
+    private var navPlacement = "both"    // "both" | "left" | "right" | "none"
     private var showZones = true         // draw the faint chevron affordance
     private var chromePos = "auto"       // "auto" | "top" | "bottom"
     private var searchEngine = "DuckDuckGo"
@@ -91,14 +91,19 @@ class MainActivity : Activity() {
     // strips while the IME is up (the chevrons/slivers look out of place over the keyboard).
     private val sliverButtons = mutableListOf<Button>()
 
-    // Edge-sliver action slots: a small button at the bottom of each nav strip,
+    // Edge-sliver action slots: a small button at the top AND bottom of each nav strip,
     // ALWAYS drawn (independent of showZones) so there is always a way to surface
     // chrome. Values: "chrome" (reveal toolbar) | "collapse" (flip placeholders) |
-    // "back" (history back) | "refresh" (reload) | "none". A load-time guard forces
-    // at least one slot to "chrome" so the user can never lock themselves out of the
-    // toolbar. "favorites" is reserved for later.
-    private var edgeSlotLeft = "chrome"
-    private var edgeSlotRight = "collapse"
+    // "back" (history back) | "refresh" (reload) | "none". In single-strip mode
+    // (navPlacement "left"/"right") the bottom slot is always forced to "chrome" so the
+    // user can never lock themselves out of the toolbar; the top slot stays whatever the
+    // user configured for that side. In "both" mode a load-time guard forces one BOTTOM
+    // slot to "chrome" if neither side has a chrome slot anywhere. "favorites" is
+    // reserved for later.
+    private var edgeSlotLeftTop = "none"
+    private var edgeSlotLeftBottom = "chrome"
+    private var edgeSlotRightTop = "none"
+    private var edgeSlotRightBottom = "collapse"
 
     // Auto-focus the address field when the toolbar is revealed by an explicit tap on
     // the chrome sliver (⌕). Since chrome is hidden by default, this makes the sliver a
@@ -276,40 +281,48 @@ class MainActivity : Activity() {
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
-    /** Builds the 1–2 native paging strips per the placement + style settings. */
+    /** Builds the 0–2 native paging strips per the placement + style settings. */
     private fun addStrips(root: FrameLayout, stripW: Int) {
         leftStrip = null
         rightStrip = null
         sliverButtons.clear()
-        if (navPlacement != "right") {
-            leftStrip = addStrip(root, stripW, Gravity.START, edgeSlotLeft)
-        }
-        if (navPlacement != "left") {
-            rightStrip = addStrip(root, stripW, Gravity.END, edgeSlotRight)
+        when (navPlacement) {
+            // No strips at all: the only affordance is a floating chrome button.
+            "none" -> addFloatingChromeButton(root)
+            // Single strip: the bottom sliver is ALWAYS chrome (the guaranteed way to
+            // reach the toolbar with no second strip to carry it); the top sliver stays
+            // whatever that side is configured for.
+            "left" -> leftStrip = addStrip(root, stripW, Gravity.START, edgeSlotLeftTop, "chrome")
+            "right" -> rightStrip = addStrip(root, stripW, Gravity.END, edgeSlotRightTop, "chrome")
+            else -> {
+                leftStrip = addStrip(root, stripW, Gravity.START, edgeSlotLeftTop, edgeSlotLeftBottom)
+                rightStrip = addStrip(root, stripW, Gravity.END, edgeSlotRightTop, edgeSlotRightBottom)
+            }
         }
     }
 
     /**
-     * One paging strip plus its optional bottom sliver button. When [slot] is an
-     * action (not "none"), the EdgeNavView is shortened by [SLIVER_H] so its paging
-     * zone ends above the sliver, and a small always-visible button is placed in the
-     * freed space. The sliver is drawn regardless of [showZones] — it's the guaranteed
-     * way to reach the toolbar.
+     * One paging strip plus its optional top and bottom sliver buttons, both FUSED into
+     * the same continuous capsule (one unbroken outline). The capsule keeps the strip's
+     * EXISTING overall size/position (its top edge is always [EdgeNavView.ACTIVE_TOP] of
+     * the strip's height, same as with no top sliver at all) — a top cap is carved out
+     * of the INSIDE of that capsule, shrinking the paging/chevron zone from within
+     * (mirrors how a bottom cap already shrinks it), so the bottom-weighted ergonomics
+     * (flip targets low, where a thumb rests) are never disturbed.
      */
-    private fun addStrip(root: FrameLayout, stripW: Int, side: Int, slot: String): EdgeNavView {
-        val hasSliver = slot != "none"
+    private fun addStrip(root: FrameLayout, stripW: Int, side: Int, slotTop: String, slotBottom: String): EdgeNavView {
+        val hasTopSliver = slotTop != "none"
+        val hasBottomSliver = slotBottom != "none"
         val sliverPx = dp(SLIVER_H)
-        // Lift the sliver off the bottom edge by the same gap the chrome pane rests at,
-        // so the sliver glyph shares the address-bar's row when the bar is revealed
-        // (bottoms align; the pane is inset horizontally to sit between the strips).
+        // Lift the bottom sliver off the bottom edge by the same gap the chrome pane
+        // rests at, so the sliver glyph shares the address-bar's row when the bar is
+        // revealed (bottoms align; the pane is inset horizontally to sit between the
+        // strips).
         val sliverGap = if (chromeAtBottom) CHROME_EDGE_GAP else 0
-        // The strip now spans DOWN OVER the sliver region (bottomMargin = just the gap)
-        // and draws the sliver cap as part of one continuous capsule; it reserves the
-        // bottom sliverPx (capReservePx) for the cap and keeps paging taps above it. The
-        // sliver overlay button sits on top of that cap for the icon + click.
         val strip = EdgeNavView(
             this, showZones,
-            capReservePx = if (hasSliver) sliverPx else 0,
+            capReservePx = if (hasBottomSliver) sliverPx else 0,
+            capReserveTopPx = if (hasTopSliver) sliverPx else 0,
             onNext = { flipPage("next") }, onPrev = { flipPage("prev") },
         )
         root.addView(
@@ -318,8 +331,8 @@ class MainActivity : Activity() {
                 bottomMargin = sliverGap
             },
         )
-        if (hasSliver) {
-            val sliver = makeSliverButton(slot)
+        if (hasBottomSliver) {
+            val sliver = makeSliverButton(slotBottom)
             root.addView(
                 sliver,
                 FrameLayout.LayoutParams(stripW, sliverPx, Gravity.BOTTOM or side).apply {
@@ -328,14 +341,57 @@ class MainActivity : Activity() {
             )
             sliverButtons.add(sliver)
         }
+        if (hasTopSliver) {
+            val sliver = makeSliverButton(slotTop)
+            val lp = FrameLayout.LayoutParams(stripW, sliverPx, Gravity.TOP or side)
+            root.addView(sliver, lp)
+            sliverButtons.add(sliver)
+            // The top cap sits INSIDE the strip's existing capsule, starting at
+            // EdgeNavView.ACTIVE_TOP of the strip's own (post-layout) height — that
+            // height isn't known yet in onCreate, so position it once layout completes.
+            strip.post {
+                lp.topMargin = (strip.height * EdgeNavView.ACTIVE_TOP).toInt()
+                sliver.layoutParams = lp
+            }
+        }
         return strip
+    }
+
+    /**
+     * The no-nav-strips fallback: with navPlacement "none" there is no rail to carry a
+     * chrome sliver, so a small floating button sits bottom-right instead — same size
+     * as a strip sliver, its own bordered pill since there's no rail behind it.
+     */
+    private fun addFloatingChromeButton(root: FrameLayout) {
+        val sliverPx = dp(SLIVER_H)
+        val btn = makeSliverButton("chrome").apply { background = borderedPillBackground() }
+        root.addView(
+            btn,
+            FrameLayout.LayoutParams(sliverPx, sliverPx, Gravity.BOTTOM or Gravity.END).apply {
+                bottomMargin = CHROME_EDGE_GAP
+                rightMargin = CHROME_EDGE_GAP
+            },
+        )
+        sliverButtons.add(btn)
+    }
+
+    /**
+     * A faint rounded-rect outline matching the strip capsule's hairline + rounding
+     * (EdgeNavView's railPaint/railRadius), for sliver buttons that stand alone with no
+     * capsule behind them to read as tappable.
+     */
+    private fun borderedPillBackground(): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(12).toFloat()
+        setStroke(dp(2), Color.rgb(200, 200, 200))
+        setColor(Color.TRANSPARENT)
     }
 
     /** The little bottom-of-strip action button (chrome reveal / collapse toggle). */
     private fun makeSliverButton(slot: String): Button {
         val glyph = when (slot) {
             "collapse" -> if (imagesCollapsed) "⊞" else "⊟"
-            "back" -> "‹"
+            "back" -> "←"
             "refresh" -> "⟳"
             else -> "" // chrome uses a drawn globe+magnifier icon, not a glyph
         }
@@ -347,7 +403,11 @@ class MainActivity : Activity() {
             // is just the icon + click sitting in the capsule's bottom cap.
             setBackgroundColor(Color.TRANSPARENT)
             setPadding(0, 0, 0, 0)
-            textSize = 20f
+            // "‹" read as too thin/faint next to the bold drawn chevrons — bump size and
+            // weight for "back" so it reads with the same visual weight as the rest of
+            // the rail's affordances.
+            textSize = if (slot == "back") 26f else 20f
+            if (slot == "back") setTypeface(typeface, android.graphics.Typeface.BOLD)
             // The chrome/address sliver reveals AND focuses the address bar — both "web
             // address" and "search". A drawn globe-with-magnifier says both; a font glyph
             // can't overlap the two, so use a centred foreground Drawable. Sized to sit in
@@ -775,20 +835,21 @@ class MainActivity : Activity() {
         collapseMode = prefs.getString("collapseMode", "auto") ?: "auto"
         collapseThreshold = prefs.getInt("collapseThreshold", 6)
         collapseBtnPlacement = prefs.getString("collapseBtnPlacement", "chrome") ?: "chrome"
-        edgeSlotLeft = prefs.getString("edgeSlotLeft", "chrome") ?: "chrome"
-        edgeSlotRight = prefs.getString("edgeSlotRight", "collapse") ?: "collapse"
+        edgeSlotLeftTop = prefs.getString("edgeSlotLeftTop", "none") ?: "none"
+        edgeSlotLeftBottom = prefs.getString("edgeSlotLeftBottom", "chrome") ?: "chrome"
+        edgeSlotRightTop = prefs.getString("edgeSlotRightTop", "none") ?: "none"
+        edgeSlotRightBottom = prefs.getString("edgeSlotRightBottom", "collapse") ?: "collapse"
         autoFocusOnReveal = prefs.getBoolean("autoFocusOnReveal", true)
-        // Lockout guard: with tap-to-dismiss and the centre reveal-strip gone, the
-        // sliver is the ONLY way to open the toolbar (and thus settings). Only an
-        // ENABLED rail can carry the chrome sliver — a chrome slot on a rail turned off
-        // by navPlacement is invisible and would lock the user out. So evaluate against
-        // active rails, and if no active rail is set to chrome, force one that is.
-        val leftActive = navPlacement != "right"
-        val rightActive = navPlacement != "left"
-        val chromeReachable = (leftActive && edgeSlotLeft == "chrome") ||
-            (rightActive && edgeSlotRight == "chrome")
-        if (!chromeReachable) {
-            if (leftActive) edgeSlotLeft = "chrome" else edgeSlotRight = "chrome"
+        // Lockout guard: with tap-to-dismiss and the centre reveal-strip gone, a chrome
+        // sliver is the ONLY way to open the toolbar (and thus settings). "left"/"right"
+        // (single strip) and "none" (floating button) always guarantee a chrome
+        // affordance by construction (see addStrips/addFloatingChromeButton) — only
+        // "both" needs a guard, forcing a bottom slot to chrome if neither side has one
+        // anywhere.
+        if (navPlacement == "both") {
+            val chromeReachable = edgeSlotLeftTop == "chrome" || edgeSlotLeftBottom == "chrome" ||
+                edgeSlotRightTop == "chrome" || edgeSlotRightBottom == "chrome"
+            if (!chromeReachable) edgeSlotLeftBottom = "chrome"
         }
         chromeAtBottom = computeChromeAtBottom()
     }
@@ -1322,15 +1383,19 @@ class MainActivity : Activity() {
         super.onResume()
         if (!::prefs.isInitialized) return
         // Re-read settings that SettingsActivity may have changed and apply them.
-        val oldStructural =
-            listOf(navStyle, navPlacement, chromePos, showZones.toString(), edgeSlotLeft, edgeSlotRight)
+        val oldStructural = listOf(
+            navStyle, navPlacement, chromePos, showZones.toString(),
+            edgeSlotLeftTop, edgeSlotLeftBottom, edgeSlotRightTop, edgeSlotRightBottom,
+        )
         val oldContent = listOf(
             strictTp.toString(), jsEnabled.toString(), blockFonts.toString(), animOff.toString(),
             collapseMode, collapseThreshold.toString(), fullEvery.toString(),
         )
         loadSettings()
-        val newStructural =
-            listOf(navStyle, navPlacement, chromePos, showZones.toString(), edgeSlotLeft, edgeSlotRight)
+        val newStructural = listOf(
+            navStyle, navPlacement, chromePos, showZones.toString(),
+            edgeSlotLeftTop, edgeSlotLeftBottom, edgeSlotRightTop, edgeSlotRightBottom,
+        )
         val newContent = listOf(
             strictTp.toString(), jsEnabled.toString(), blockFonts.toString(), animOff.toString(),
             collapseMode, collapseThreshold.toString(), fullEvery.toString(),

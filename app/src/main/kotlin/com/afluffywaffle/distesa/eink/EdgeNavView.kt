@@ -39,11 +39,16 @@ import android.view.View
  *
  * @param capReservePx height (px) reserved at the BOTTOM for the sliver cap, 0 if the
  *   strip has no sliver (then the capsule bottom is just the paging zone).
+ * @param capReserveTopPx height (px) carved out of the TOP of the EXISTING capsule for
+ *   a second sliver cap, 0 if the strip has no top sliver. The capsule's own top edge
+ *   ([ACTIVE_TOP]) never moves — this only shrinks the paging zone from within, same as
+ *   [capReservePx] already does at the bottom; the strip keeps its current overall size.
  */
 class EdgeNavView(
     context: Context,
     var showZones: Boolean = true,
     private val capReservePx: Int = 0,
+    private val capReserveTopPx: Int = 0,
     private val onNext: (() -> Unit)? = null,
     private val onPrev: (() -> Unit)? = null,
 ) : View(context) {
@@ -103,21 +108,33 @@ class EdgeNavView(
         val cx = w / 2f
         val half = railPaint.strokeWidth / 2f
 
+        // The capsule's own top edge NEVER moves — same ACTIVE_TOP as before, so the
+        // strip keeps its current size regardless of a top sliver. A top cap just
+        // carves capReserveTopPx off the INSIDE of the existing capsule, shrinking the
+        // paging zone from within (mirrors how capReservePx already shrinks it at the
+        // bottom).
         val railTop = ACTIVE_TOP * h
-        val pagingBottom = h - capReservePx // where the sliver cap begins (or h if none)
+        val pagingTop = railTop + capReserveTopPx
+        val pagingBottom = h - capReservePx // where the bottom sliver cap begins (or h if none)
 
-        // One continuous capsule — all four corners rounded — from the top of the active
-        // zone down through the sliver cap.
+        // One continuous capsule — all four corners rounded — spanning the strip's
+        // existing bounds (top cap and bottom cap both live INSIDE it).
         railRect.set(railInsetX, railTop + half, w - railInsetX, h - half)
         canvas.drawRoundRect(railRect, railRadius, railRadius, railPaint)
 
-        // prev/next split: a short centred hairline floating inside the paging zone.
-        val splitY = railTop + (pagingBottom - railTop) * SPLIT_FRAC
+        // prev/next split: a short centred hairline floating inside the paging zone —
+        // centred between whatever slivers are present (top and/or bottom), so the
+        // chevrons re-centre themselves in the space left over.
+        val splitY = pagingTop + (pagingBottom - pagingTop) * SPLIT_FRAC
         drawDivider(canvas, cx, splitY)
 
-        drawChevron(canvas, cx, railTop + (splitY - railTop) / 2f, down = false)
+        drawChevron(canvas, cx, pagingTop + (splitY - pagingTop) / 2f, down = false)
         drawChevron(canvas, cx, splitY + (pagingBottom - splitY) / 2f, down = true)
 
+        if (capReserveTopPx > 0) {
+            // top-cap/paging boundary: a floating centred hairline, open-ended.
+            drawDivider(canvas, cx, pagingTop)
+        }
         if (capReservePx > 0) {
             // paging/sliver boundary: another floating centred hairline, open-ended.
             drawDivider(canvas, cx, pagingBottom)
@@ -148,14 +165,15 @@ class EdgeNavView(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (onNext == null && onPrev == null) return false
         val h = height.toFloat()
-        val railTop = ACTIVE_TOP * h
+        val pagingTop = ACTIVE_TOP * h + capReserveTopPx
         val pagingBottom = h - capReservePx
-        val splitY = railTop + (pagingBottom - railTop) * SPLIT_FRAC
+        val splitY = pagingTop + (pagingBottom - pagingTop) * SPLIT_FRAC
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                // Inert above the paging zone (falls through to the page) and below it
-                // (the sliver overlay button handles that region).
-                if (event.y < railTop || event.y >= pagingBottom) return false
+                // Inert above the paging zone (falls through to the page, or — if a top
+                // cap is reserved — is where the top sliver overlay button sits) and
+                // below it (the bottom sliver overlay button handles that region).
+                if (event.y < pagingTop || event.y >= pagingBottom) return false
                 downX = event.x
                 downY = event.y
                 return true
