@@ -165,6 +165,19 @@ class LayoutActivity : Activity() {
         column.addView(hint, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         column.addView(preview, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
 
+        // Chloe watermark: the mascot typing at her laptop sits behind the wireframe as a
+        // faded backdrop. The PreviewView is stroke-only line-art (transparent between the
+        // strokes), so she reads through it. Kept low-alpha so the gray wireframe stays
+        // legible on e-ink; added before the column so it renders underneath.
+        val chloeBg = ImageView(this).apply {
+            setImageResource(R.drawable.chloe_typing)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            alpha = 0.15f
+        }
+        root.addView(chloeBg, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT).apply {
+            setMargins(dp(24), dp(80), dp(24), dp(80))
+        })
+
         root.addView(column, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         setContentView(root)
     }

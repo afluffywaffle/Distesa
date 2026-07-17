@@ -20,6 +20,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import androidx.appcompat.widget.SwitchCompat
 import androidx.core.content.ContextCompat
@@ -79,6 +80,10 @@ class MainActivity : Activity() {
     private var goBtn: Button? = null
     private var canGoBack = false
     private var currentUrl: String? = null
+    // Chloe "home" mascot: a full-bleed overlay above the (opaque) GeckoView, shown only
+    // when no real page is loaded — the empty/new-tab state. Hidden the moment a real URL
+    // loads (see setHomeVisible / onLocationChange).
+    private lateinit var homeMascot: ImageView
     private val ui = Handler(Looper.getMainLooper())
     private val autoHide = Runnable { hideChrome() }
     private var chromeAtBottom = false
@@ -238,6 +243,20 @@ class MainActivity : Activity() {
         }
         root.addView(view, viewLp)
 
+        // Chloe home mascot: sits directly ABOVE the opaque GeckoView (which can't be seen
+        // through), but is added BEFORE the strips/chrome so the slivers and gear still
+        // draw on top and stay tappable — the user can summon chrome and type a URL from
+        // the home screen. Visible only in the empty state; hidden once a page loads.
+        homeMascot = ImageView(this).apply {
+            setImageResource(R.drawable.chloe_typing)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setBackgroundColor(0xFFFFFFFF.toInt())
+            setPadding(dp(32), dp(64), dp(32), dp(64))
+        }
+        root.addView(homeMascot, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
+        ))
+
         // Paging strips (native EdgeNavView). Bottom-weighted; tap = flip.
         addStrips(root, stripW)
 
@@ -289,12 +308,25 @@ class MainActivity : Activity() {
             v.onApplyWindowInsets(insets)
         }
 
-        session.loadUri(TEST_URL)
+        // Start on the blank Chloe home rather than auto-loading a page — the mascot
+        // overlay is visible by default and stays until the user navigates somewhere.
+        setHomeVisible(true)
 
         ensureUBlock(runtime)
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    /** Show/hide the Chloe home mascot (the empty-state overlay above the web view). */
+    private fun setHomeVisible(visible: Boolean) {
+        if (::homeMascot.isInitialized) {
+            homeMascot.visibility = if (visible) View.VISIBLE else View.GONE
+        }
+    }
+
+    /** True when no real page is loaded (blank / new-tab / about:blank). */
+    private fun isBlankUrl(url: String?): Boolean =
+        url.isNullOrBlank() || url == "about:blank"
 
     /** Builds the 0–2 native paging strips per the placement + style settings. */
     private fun addStrips(root: FrameLayout, stripW: Int) {
@@ -999,6 +1031,8 @@ class MainActivity : Activity() {
             hasUserGesture: Boolean,
         ) {
             currentUrl = url
+            // Reveal the Chloe home only in the blank state; hide it once a real page loads.
+            setHomeVisible(isBlankUrl(url))
             // Keep the (usually hidden) address field in sync when it's not focused.
             if (::urlField.isInitialized && !urlField.hasFocus()) {
                 url?.let { urlField.setText(it) }
