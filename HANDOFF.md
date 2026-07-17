@@ -5,7 +5,61 @@ Threads: `phase1` (Distesa Phase-1 UI/media/settings + naming)
 ---
 
 ## Thread: phase1
-_Updated 2026-07-16 (session f)_
+_Updated 2026-07-16 (session g)_
+
+### Session 2026-07-16 (g): NATIVE scroll + native EPD refresh — COMMITTED + PUSHED (`8843643`)
+
+Executed the Opus-planned spike: replaced the JS-extension-driven flip with native
+scroll. Verified on the **Manta** (`SN100C10008955` @ `100.98.2.91:5555`). **User
+confirms the flip is "really snappy."** `main` pushed — origin in sync.
+
+**1. Native scroll (the core change).** `flipPage(dir)` no longer posts `navFlip` over
+the eink port. It now scrolls the GeckoView directly:
+`session.panZoomController.scrollBy(ScreenLength.zero(),
+ScreenLength.fromVisualViewportHeight(±0.9), PanZoomController.SCROLL_BEHAVIOR_AUTO)`
+(instant, no fling; viewport-fraction units are device-independent, and the 0.9 gives a
+~10% overlap band — candidate for the parked overlap-% setting). Both WebExtension IPC
+hops are eliminated (old path: native → einkPort(navFlip) → background.js → content.js
+scroll → background.js(flip) → onFlip → Epd.pageTurn).
+
+**2. Native EPD refresh via a debounced backstop.** `armScrollRefresh()` (48ms settle,
+`SCROLL_SETTLE_MS`) is armed by `flipPage` after each `scrollBy`, coalescing into ONE
+`Epd.pageTurn` per turn — logs the SAME oracle `flip -> partial refresh` /
+`flip -> EPD FULL CLEAR`. A `ScrollDelegate` (`EinkScrollDelegate`) arms the same
+refresh. **Finding:** `ScrollDelegate.onScrollChanged` does NOT fire for *programmatic*
+`scrollBy` on GV152, so the **backstop is the primary driver** (fires unconditionally per
+tap — also covers the silent edge-clamp at top/bottom of page); the delegate only adds
+refresh on *finger* scrolls (a bonus the old path never had).
+
+**3. Deleted the dead JS paging path.** Removed `content.js` + its `manifest.json`
+content_scripts entry; stripped the `flip` relay + `onMessage` listener from
+`background.js`; removed the `"flip"` case from `MainActivity`'s `FlipMessageDelegate`.
+`einkPort` stays (images policy / settings levers); its doc comment de-navFlip'd.
+
+**4. Release now arm64-v8a-only too.** Moved `ndk.abiFilters += "arm64-v8a"` from the
+debug block up to `defaultConfig` in `app/build.gradle.kts` — Supernote is the only
+target, so release drops 3 unused ABIs.
+
+**Caveat held as predicted:** native scroll does NOT restore a per-tap strip flash.
+
+**Verification notes / gotchas this session:**
+- Tailscale DNS was flaky mid-session (`ping 1.1.1.1` OK but `example.com` = unknown
+  host) → the Wikipedia `TEST_URL` blanked. Used a **DNS-free `data:` tall page** to
+  prove scroll moves real content; restarting Tailscale fixed DNS. Reverted the temp
+  `data:` harness + a temp scrollY log before committing (diff verified clean).
+- User confirmed on-device: page scrolls up **and** down, the side scrollbar tracks, and
+  **~4 taps reach page end** — real scrolling, not refresh-in-place.
+- **Removed a stale `com.afluffypancake.distesa.dev`** build (pre-rename bundle id) still
+  installed on the Manta.
+- **Manta IME "jumping to top" is NOT a bug / not a regression:** `chromePos` is unset →
+  `auto` → on the Manta (≥9") that resolves to **top chrome**, so the address bar sits at
+  top and the IME-lift is a no-op (IME can't cover a top bar). The bottom-chrome IME-lift
+  only exercises when `chromePos` is force-set to `bottom` (session b did this to test).
+  User re-tested and confirmed it was on auto.
+
+**Next:** Chrome-focused → tap-Settings IME-won't-dismiss bug (item 3 backlog).
+
+---
 
 ### Session 2026-07-16 (f): edge-nav icon legibility + tap-feedback resolved + arm64 debug — COMMITTED (`8898c01`)
 
@@ -365,22 +419,22 @@ Shipped (committed; `88c87ba` zapper, `9d57737` the rest):
 
 ### Next session — paste this to start
 > Resume **Distesa**, thread **phase1** (repo ~/Develop/Distesa, branch `main`, tip
-> `8898c01`, unpushed — `main` is 3 commits ahead of origin). Last session (f) cleared the
-> two edge-nav backlog items — globe+chevron white moat for dark-bg legibility, and
-> **resolved the tap-feedback highlight as "no transient flash"** (root cause: the strip is
-> a separate overlay surface with no EPD refresh of its own; only a GeckoView-surface
-> invalidate reliably refreshes this panel) — and made debug builds arm64-v8a-only
-> (515MB→198MB APK). Read `HANDOFF.md` → `## Thread: phase1` (session f) and the
+> `8843643` — **pushed, origin in sync**). Last session (g) landed the Opus-planned
+> **native scroll + native EPD refresh** spike, replacing the JS-extension flip:
+> `flipPage` now scrolls the GeckoView directly via
+> `PanZoomController.scrollBy(0, ±0.9 visual-viewport-height, SCROLL_BEHAVIOR_AUTO)` and a
+> debounced `armScrollRefresh()` backstop drives `Epd.pageTurn` (same `flip -> partial
+> refresh` oracle). The whole `navFlip`→`content.js`→`flip` round-trip is deleted
+> (`content.js` gone). **Verified snappy on the Manta**; strip-flash caveat held. Release
+> is now arm64-only too. Read `HANDOFF.md` → `## Thread: phase1` (session g) and the
 > `handoff_phase1` memory; **also read `~/Develop/supernote-dev-reference/README.md` AND
 > `Epd.kt`'s "prior approaches tried and abandoned" notes before any Supernote/refresh
-> work.** Device: Nomad serial `SN078C10005528` over Tailscale `100.67.164.61:5555`; adb at
-> `~/Library/Android/sdk/platform-tools/adb`; package `com.afluffywaffle.distesa.dev`; build
-> `./gradlew installDebug`. **First task (Opus-sized, PLAN ONLY — no code, user wants to
-> approve direction first): scope a spike plan for NATIVE scroll + native EPD refresh to
-> replace the JS-extension-driven flip.** Motivation: paging latency (JS round-trip per
-> flip) + flip reliability. Deliver: how native scroll would replace the current
-> `flipPage`→extension→`onFlip`→`Epd.pageTurn` chain, native EPD refresh options (what
-> `Epd`/`RattaEink` already know), risks, and what to prototype first. Note the caveat:
-> native scroll alone won't bring back a per-tap strip flash. Also open, not started:
-> **Chrome-focused→tap-Settings IME-doesn't-dismiss bug**; whether release should also go
-> single-ABI; parked divider-length tune + chrome-slot-guard persistence; pushing `main`.
+> work.** Devices: Nomad `SN078C10005528` @ `100.67.164.61:5555`, Manta `SN100C10008955`
+> @ `100.98.2.91:5555`; adb at `~/Library/Android/sdk/platform-tools/adb`; package
+> `com.afluffywaffle.distesa.dev`; build `./gradlew installDebug`. **Next task:
+> Chrome-focused → tap-Settings IME-won't-dismiss bug** (item 3 backlog) — when the
+> address field is auto-focused and the user taps Settings, the IME doesn't dismiss and it
+> hides the quick panel; likely the settings-tap path isn't firing the same
+> IME-dismiss/panel-restore hook normal nav does (cf. `6f05e0b`). Also parked:
+> divider-hairline length tune + chrome-slot-guard persistence. (Note: "IME jumps to top"
+> on the Manta is NOT a bug — `chromePos=auto` → top chrome on ≥9"; IME-lift is bottom-only.)
