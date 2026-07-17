@@ -533,8 +533,13 @@ class MainActivity : Activity() {
             setBackgroundColor(Color.TRANSPARENT)
             textSize = 20f
             setOnClickListener {
-                settingsPanel.visibility =
-                    if (settingsPanel.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                val show = settingsPanel.visibility != View.VISIBLE
+                // Opening the quick panel with the address bar auto-focused (IME up)
+                // must dismiss the IME first — otherwise the keyboard overlay covers
+                // the panel. Clearing focus also fires urlField's blur branch, which
+                // restores the edge nav and drops the chrome lift.
+                if (show) dismissAddressIme()
+                settingsPanel.visibility = if (show) View.VISIBLE else View.GONE
             }
         }
         bar.addView(backBtn)
@@ -687,6 +692,16 @@ class MainActivity : Activity() {
         chromeBar.visibility = View.GONE
         settingsPanel.visibility = View.GONE
         applyChromeInset(false)
+        dismissAddressIme()
+    }
+
+    /**
+     * Dismiss the address-bar IME: clear the field's focus and hide the soft
+     * input. Clearing focus fires urlField's blur branch (restore edge nav, drop
+     * the IME lift). Safe to call when the field isn't focused / the IME is down.
+     */
+    private fun dismissAddressIme() {
+        if (!::urlField.isInitialized) return
         urlField.clearFocus()
         (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
             ?.hideSoftInputFromWindow(urlField.windowToken, 0)
