@@ -5,28 +5,52 @@ Threads: `phase1` (Distesa Phase-1 UI/media/settings + naming)
 ---
 
 ## Thread: phase1
-_Updated 2026-07-17 (session i)_
+_Updated 2026-07-17 (session j)_
 
 ### Next session — paste this to start
 
 > Resume Distesa, thread **phase1** (repo `~/Develop/Distesa`, branch `main`, tip
-> `1244a74` — committed locally, **NOT yet pushed**). Session i was UI polish on the
-> edge-nav rail: fused it into one continuous rounded capsule (outline drawn by
-> `EdgeNavView` behind the buttons, floating divider above the bottom cap), made the
-> bottom slot a self-contained floating button with its own border, and swapped the back
-> glyph from a thin `‹` chevron to a traditional leftwards arrow with a tail (`←`, 26sp
-> bold so it reads at e-ink contrast); Settings back label now `← Back`. Verified on the
-> Nomad. Read `HANDOFF.md` → `## Thread: phase1` (session i) and the `handoff_phase1`
-> memory; also read `~/Develop/supernote-dev-reference/README.md` AND `Epd.kt`'s "prior
+> `4772a2d` — **committed locally, NOT pushed**; `040aa2b` under it). Session j built the
+> big new feature: a full-screen WYSIWYG **layout editor** (`LayoutActivity`) that
+> replaces the abstract slot cycle-rows — you tap a faithful preview of the browser
+> (rails, corner sliver slots, address bar) and a centred pane configures that element.
+> Also landed: **natural scroll** (default on; interface-level zone→action swap in
+> `addStrip`, `flipPage` untouched), **configurable chrome-bar slots** (`[left] url
+> [r1][r2] ⚙`, gear fixed) with per-element panes, a contextual **→ Go** button, a
+> **search picker incl. Custom** template (`%s`), **auto-focus now default OFF**, a
+> shared **`NavActions`** catalog (one source of truth for slot functions), and a
+> paginated **? help** (Layuv-style, one category per page). Verified on the Nomad.
+> Read `HANDOFF.md` → `## Thread: phase1` (session j) and the `handoff_phase1` memory;
+> also read `~/Develop/supernote-dev-reference/README.md` AND `Epd.kt`'s "prior
 > approaches tried and abandoned" notes before any Supernote/refresh work. Devices: Nomad
 > `SN078C10005528` @ `100.67.164.61:5555` (also USB), Manta `SN100C10008955` @
 > `100.98.2.91:5555`; adb at `~/Library/Android/sdk/platform-tools/adb`; package
-> `com.afluffywaffle.distesa.dev`; build `./gradlew installDebug` (if install throws
-> `EOF` with both USB+Tailscale entries of one device attached, `adb -s <serial> install
-> -r app/build/outputs/apk/debug/app-debug.apk` instead). First task: **push `1244a74`**,
-> then pick the next backlog item with the user (named session-e/f backlog is cleared;
-> parked: divider-hairline length tune + chrome-slot-guard persistence + Settings-page UX
-> overhaul, task #1).
+> `com.afluffywaffle.distesa.dev`; build `./gradlew assembleDebug` then `adb -s
+> SN078C10005528 install -r app/build/outputs/apk/debug/app-debug.apk` (installDebug
+> throws `EOF` with both USB+Tailscale entries attached; `LayoutActivity` is
+> `exported=false` so `am start` from shell is blocked — the user navigates to it).
+> First task: **push `4772a2d`**; then decide: (a) drop the now-redundant "Search engine"
+> cycle row in `SettingsActivity` (search lives in the editor now); (b) the parked
+> big idea — **make the editor the main settings page**, with links out to other settings.
+
+### Session 2026-07-17 (j): visual layout editor + natural scroll + configurable chrome bar — COMMITTED (`040aa2b` + `4772a2d`, not pushed)
+
+Big feature session, verified on the **Nomad** (`SN078C10005528`). Heavily iterated on-device with the user (many screenshots).
+
+- **`LayoutActivity` (new) — WYSIWYG layout editor.** Full-screen, tap-to-configure preview that maps 1:1 onto the real layout (bottom-weighted rails at `ACTIVE_TOP=0.40`, corner sliver slots, address bar at resolved position). Tap an element → centred radio pane. Launched from `SettingsActivity` → Navigation → "Layout & buttons ›" (removed the 4 abstract slot cycle-rows + Nav-side row).
+- **Natural scroll (default ON).** Interface-level inversion only: `addStrip` binds the rail's upper zone → `flipPage("next")` when natural, lower → "prev"; `flipPage`'s scroll mechanism is untouched (user insisted on this separation). Up-chevron advances the page (content travels the way the chevron points).
+- **Rails pane.** Tap page/rail → Location (both/left/right/none) + Natural-scroll toggle, re-rendering in place. `none` → floating chrome button bottom-right (mirrors `addFloatingChromeButton`).
+- **Edge slivers.** Tap a corner → function picker; empty (`none`) slots draw a tappable dashed placeholder (both caps always reserved in the preview).
+- **Configurable chrome-bar slots.** `buildChromeBar` refactored to `[left] url [r1][r2] ⚙` reading `chromeBtnLeft/Right1/Right2` (defaults back/refresh/collapse) via `makeChromeButton`; ⚙ fixed (never removable → settings can't be stranded). Per-element panes (tap each button, or the url field for position+search). Contextual **→ Go** button (`goBtn`) shows on url-field focus for novices.
+- **Search + Custom.** url-field pane has Position (auto/top/bottom) + engine list + **Custom…** (`customSearchUrl` template, `%s`=query; `submitUrl` uses it). **`autoFocusOnReveal` default flipped to false** (annoying while configuring; gold while browsing).
+- **`NavActions` (new) — shared catalog.** One source of truth for slot functions (id/label/glyph/context + `menuGlyph` for toggling fns like collapse `⊟ / ⊞`). All pickers + preview glyphs pull from it; back glyph unified to `←` everywhere (was `‹` on the chrome bar).
+- **? help.** Bordered icon button (top-right); paginated Layuv-style (each page one category — Buttons / Navigation rails / Address bar — no scroll, `i / N` + Prev/Next). Combo globe icon rendered inline in the Address-bar option via `ImageSpan`.
+
+**Files:** `LayoutActivity.kt` (new, ~600 lines), `NavActions.kt` (new), `MainActivity.kt` (chrome-bar slots + Go + natural-scroll binding + custom search + auto-focus default), `SettingsActivity.kt` (launcher row, removed slot rows + dead code, defaults), `AndroidManifest.xml` (register `LayoutActivity`). Compiles clean; verified on-device.
+
+**Open Qs:** push `4772a2d`; drop redundant SettingsActivity "Search engine" row?; future = editor as main settings page. **Preview note:** the editor shows the *configured* back slot even though the real bar hides Back when you can't go back (deliberate — editor shows assignments, not live state).
+
+---
 
 ### Session 2026-07-17 (i): edge-nav capsule redesign polish + traditional back arrow — COMMITTED (`1244a74`, not pushed)
 
