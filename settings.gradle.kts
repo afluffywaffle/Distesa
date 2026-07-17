@@ -15,7 +15,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "distesa"
+rootProject.name = "avosetta"
 
 // Single Android module — the GeckoView spike (Phase 0 Spike A).
 include(":app")

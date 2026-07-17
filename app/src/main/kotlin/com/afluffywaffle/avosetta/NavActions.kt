@@ -1,4 +1,4 @@
-package com.afluffywaffle.distesa
+package com.afluffywaffle.avosetta
 
 /**
  * The single source of truth for the functions a configurable button can perform —

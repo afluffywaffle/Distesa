@@ -1,6 +1,6 @@
-# Distesa
+# Avosetta
 
-Distesa is a minimal, e-ink-first web browser for the Supernote Nomad and Manta
+Avosetta is a minimal, e-ink-first web browser for the Supernote Nomad and Manta
 (RK3566, Android 11). It aims to be a fast, low-ghosting, ad-free reading browser
 tuned for a monochrome EPD panel: no chrome clutter, greyscale-safe affordances,
 edge-tap navigation, and a rendering path that drives the Supernote EPD refresh
@@ -211,7 +211,7 @@ locally and git-ignored — recreate it if cloning fresh.
 ~/Library/Android/sdk/platform-tools/adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Application ID is `com.afluffywaffle.distesa.dev` (the `.dev` suffix installs it
+Application ID is `com.afluffywaffle.avosetta.dev` (the `.dev` suffix installs it
 alongside other apps on the device).
 
 On the device, the EPD reflection path requires hidden-API access:

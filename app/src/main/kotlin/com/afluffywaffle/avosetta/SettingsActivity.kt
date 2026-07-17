@@ -1,4 +1,4 @@
-package com.afluffywaffle.distesa
+package com.afluffywaffle.avosetta
 
 import android.app.Activity
 import android.content.Intent
@@ -62,7 +62,7 @@ class SettingsActivity : Activity() {
         collapseThreshold = prefs.getInt("collapseThreshold", 6)
         autoFocusOnReveal = prefs.getBoolean("autoFocusOnReveal", false)
 
-        title = "Distesa settings"
+        title = "Avosetta settings"
 
         val root = ScrollView(this).apply {
             setBackgroundColor(0xFFFFFFFF.toInt()) // white page — never a dark band

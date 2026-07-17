@@ -1,4 +1,4 @@
-// Distesa :app — the GeckoView e-ink browser spike. Classic Views (NOT Compose):
+// Avosetta :app — the GeckoView e-ink browser spike. Classic Views (NOT Compose):
 // a full-screen GeckoView backed by a singleton GeckoRuntime + GeckoSession.
 //
 // Repositories are NOT declared here: the settings.gradle.kts
@@ -11,18 +11,18 @@ plugins {
 }
 
 android {
-    namespace = "com.afluffywaffle.distesa"
+    namespace = "com.afluffywaffle.avosetta"
     compileSdk = 36
 
     defaultConfig {
         // .dev suffix so this spike installs ALONGSIDE other apps on the device.
-        applicationId = "com.afluffywaffle.distesa.dev"
+        applicationId = "com.afluffywaffle.avosetta.dev"
         minSdk = 30 // Nomad/Manta are Android 11.
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
 
-        // Distesa targets Supernote devices ONLY (Nomad/Manta), which are all
+        // Avosetta targets Supernote devices ONLY (Nomad/Manta), which are all
         // arm64-v8a. Bundling GeckoView's native libs for every ABI (armeabi-v7a,
         // x86, x86_64) is dead weight no target can use (~500MB APK, slow installs).
         // Restrict BOTH debug and release to arm64-v8a.

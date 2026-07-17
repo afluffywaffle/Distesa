@@ -1,4 +1,4 @@
-package com.afluffywaffle.distesa
+package com.afluffywaffle.avosetta
 
 import android.app.Activity
 import android.content.Context
@@ -15,7 +15,7 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
-import com.afluffywaffle.distesa.eink.GlobeSearchDrawable
+import com.afluffywaffle.avosetta.eink.GlobeSearchDrawable
 import kotlin.math.hypot
 
 /**

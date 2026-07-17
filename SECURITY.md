@@ -1,4 +1,4 @@
-# Distesa — security notes
+# Avosetta — security notes
 
 Distesa is a GeckoView browser for Supernote e-ink devices. Browsers are broad attack
 surfaces; this file records where responsibility sits and how credentials should be

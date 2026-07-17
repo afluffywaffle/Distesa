@@ -1,4 +1,4 @@
-package com.afluffywaffle.distesa
+package com.afluffywaffle.avosetta
 
 import android.app.Activity
 import android.content.Context
@@ -22,7 +22,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import androidx.appcompat.widget.SwitchCompat
-import com.afluffywaffle.distesa.eink.EdgeNavView
+import com.afluffywaffle.avosetta.eink.EdgeNavView
 import java.net.URLEncoder
 import kotlin.math.hypot
 import org.mozilla.geckoview.ContentBlocking
@@ -35,8 +35,8 @@ import org.mozilla.geckoview.PanZoomController
 import org.mozilla.geckoview.ScreenLength
 import org.mozilla.geckoview.WebExtension
 import org.mozilla.geckoview.WebExtensionController
-import com.afluffywaffle.distesa.eink.Epd
-import com.afluffywaffle.distesa.eink.GlobeSearchDrawable
+import com.afluffywaffle.avosetta.eink.Epd
+import com.afluffywaffle.avosetta.eink.GlobeSearchDrawable
 
 /**
  * Distesa Phase 0 Spike A — the GeckoView engine evaluation.
