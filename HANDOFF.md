@@ -1,37 +1,53 @@
 # HANDOFF
 
-Threads: `phase1` (Distesa Phase-1 UI/media/settings + naming)
+Threads: `phase1` (Distesa Phase-1 UI/media/settings + naming) · `avosetta` (rebrand Distesa→Avosetta + Chloe mascot/icon)
 
 ---
 
 ## Thread: phase1
-_Updated 2026-07-17 (session j)_
+_Updated 2026-07-17 (session k)_
 
 ### Next session — paste this to start
 
-> Resume Distesa, thread **phase1** (repo `~/Develop/Distesa`, branch `main`, tip
-> `4772a2d` — **committed locally, NOT pushed**; `040aa2b` under it). Session j built the
-> big new feature: a full-screen WYSIWYG **layout editor** (`LayoutActivity`) that
-> replaces the abstract slot cycle-rows — you tap a faithful preview of the browser
-> (rails, corner sliver slots, address bar) and a centred pane configures that element.
-> Also landed: **natural scroll** (default on; interface-level zone→action swap in
-> `addStrip`, `flipPage` untouched), **configurable chrome-bar slots** (`[left] url
-> [r1][r2] ⚙`, gear fixed) with per-element panes, a contextual **→ Go** button, a
-> **search picker incl. Custom** template (`%s`), **auto-focus now default OFF**, a
-> shared **`NavActions`** catalog (one source of truth for slot functions), and a
-> paginated **? help** (Layuv-style, one category per page). Verified on the Nomad.
-> Read `HANDOFF.md` → `## Thread: phase1` (session j) and the `handoff_phase1` memory;
-> also read `~/Develop/supernote-dev-reference/README.md` AND `Epd.kt`'s "prior
+> Resume Avosetta, thread **phase1** (repo `~/Develop/Distesa`, branch
+> **`settings-editor-refactor`**, tip `13c32c3` — **committed locally, NOT pushed, NOT
+> merged to `main`**). Session k made the visual **layout editor the main settings hub**
+> and split the old flat settings list into focused pages, each reachable from a top-bar
+> button (⌗ Rendering · drawn Supernote device icon · drawn puzzle Extensions icon · ?
+> help). **RenderingActivity** = web-content levers (block fonts / tracking / JS /
+> animations-off) each explained + an impact card-list; restrictive toggles confirm impact
+> before applying. **SupernoteActivity** = e-ink tuning (image auto-collapse + full-clear).
+> **SettingsActivity** = Extensions (uBlock) only. The `NavActions` catalog now carries the
+> three page launchers (Supernote/Extensions use vector icons via new `Spec.iconRes`) plus
+> zap/undozap/resetzap, all assignable to sliver+chrome slots. Quick panel trimmed (toolbar
+> pos → editor, animations → Rendering) with the zap actions divider-grouped. Verified on
+> the Nomad. Read `HANDOFF.md` → `## Thread: phase1` (session k) and the `handoff_phase1`
+> memory; also read `~/Develop/supernote-dev-reference/README.md` AND `Epd.kt`'s "prior
 > approaches tried and abandoned" notes before any Supernote/refresh work. Devices: Nomad
 > `SN078C10005528` @ `100.67.164.61:5555` (also USB), Manta `SN100C10008955` @
 > `100.98.2.91:5555`; adb at `~/Library/Android/sdk/platform-tools/adb`; package
-> `com.afluffywaffle.distesa.dev`; build `./gradlew assembleDebug` then `adb -s
-> SN078C10005528 install -r app/build/outputs/apk/debug/app-debug.apk` (installDebug
-> throws `EOF` with both USB+Tailscale entries attached; `LayoutActivity` is
-> `exported=false` so `am start` from shell is blocked — the user navigates to it).
-> First task: **push `4772a2d`**; then decide: (a) drop the now-redundant "Search engine"
-> cycle row in `SettingsActivity` (search lives in the editor now); (b) the parked
-> big idea — **make the editor the main settings page**, with links out to other settings.
+> **`com.afluffywaffle.avosetta.dev`**; build `./gradlew :app:assembleDebug` then `adb -s
+> SN078C10005528 install -r app/build/outputs/apk/debug/app-debug.apk` (the settings
+> activities are `exported=false` so `am start` from shell is blocked — navigate via UI, or
+> drive with the sliver+gear+"More settings…" tap chain). First tasks: **push/merge the
+> `settings-editor-refactor` branch**; then the open UX calls — (a) rename/rethink the
+> ambiguous **"Images: …"** quick-panel control; (b) confirm **animations-off** belongs in
+> Rendering (vs Supernote) and whether it needs an impact prompt; (c) **2-column catalog
+> picker** once the option list overflows one pane (at 11 now, still fits).
+
+### Session 2026-07-17 (k): settings editor becomes the hub; Rendering/Supernote/Extensions pages — COMMITTED (`13c32c3` on branch `settings-editor-refactor`, not pushed)
+
+Settings-refactor session, heavily iterated on-device with the user (many screenshots). All verified on the **Nomad** (`SN078C10005528`).
+
+- **Layout editor is the main settings screen.** Chrome quick-panel "More settings…" now opens `LayoutActivity` (was `SettingsActivity`). The editor top bar gained three bordered buttons left of `?`: **⌗** (Rendering, text glyph), a **drawn Supernote device icon**, and a **drawn puzzle Extensions icon** — the 🧩/device emojis render in colour on e-ink, so they're B&W vector drawables (`ic_puzzle.xml`, `ic_supernote.xml`) tinted at runtime.
+- **RenderingActivity (new).** Web-content levers: Block web fonts / Strict tracking protection / JavaScript / Animations off — each with a plain-language explanation, plus an "Impact at a glance" **stacked card list** (name + bold **Performance**/**Depends** lines; the old 3-column table compressed too hard at readable font sizes). The three site-affecting toggles show an **impact-confirmation popup** (custom scrim/pane, not AlertDialog) on the *restrictive* move (block fonts ON, strict-TP ON, JS OFF); re-enabling applies silently. Animations-off is a plain toggle (can't break sites).
+- **SupernoteActivity (new).** E-ink device tuning: Images auto-collapse (mode + threshold) and E-ink refresh (full-clear), each explained. Split out because Rendering was overflowing.
+- **SettingsActivity is now the Extensions page** (uBlock on/off only), retitled. Everything else moved out; dead vars/helpers/imports removed.
+- **`NavActions` catalog extended.** Added `Spec.iconRes: Int?` (optional vector drawable, preferred over the text glyph). New actions: `rendering`/`supernote`/`extensions` (page launchers) + `zap`/`undozap`/`resetzap` (⬡ ↺ ⊘), all `SLIVER`+`CHROME`. Both `makeSliverButton`/`makeChromeButton` dispatch them; the editor `PreviewView` draws the icons (mirroring the existing `globe` pattern). `options()` shows label-only for icon actions.
+- **Quick-settings panel trimmed.** Dropped toolbar-position (in the editor) and animations-off (now Rendering); kept **Images: …** (flagged in-code as ambiguously named / due for a rethink); zap/undo/reset fenced into a divider-grouped cluster (`panelDivider()`).
+- **Rails picker** absorbed nav **Style** (inset/overlay = `navStyle`) and **Show tap zones** (`showZones`), removed from `SettingsActivity`; explanation fonts bumped (13→15f) across the pages.
+- **Left uncommitted:** `HANDOFF.md` (avosetta-thread doc from the rebrand session) — intentionally not in commit `13c32c3`.
+- **Open UX questions:** "Images: …" rename/behaviour; animations-off placement + whether it needs the impact prompt ("be careful since that's about full" — user's note was ambiguous); 2-column catalog picker at overflow.
 
 ### Session 2026-07-17 (j): visual layout editor + natural scroll + configurable chrome bar — COMMITTED (`040aa2b` + `4772a2d`, not pushed)
 
@@ -550,3 +566,59 @@ Shipped (committed; `88c87ba` zapper, `9d57737` the rest):
 > IME-dismiss/panel-restore hook normal nav does (cf. `6f05e0b`). Also parked:
 > divider-hairline length tune + chrome-slot-guard persistence. (Note: "IME jumps to top"
 > on the Manta is NOT a bug — `chromePos=auto` → top chrome on ≥9"; IME-lift is bottom-only.)
+
+---
+
+## Thread: avosetta
+_Updated 2026-07-17 (rebrand session)_
+
+Renaming/rebranding the app **Distesa → Avosetta** (the avocet), plus a mascot character
+**Chloe** that spun out into its own project.
+
+### Done this session (all merged to `main`, tip `6e65d77`)
+- **Name locked: Avosetta** (app; "Avosetta Browser"). Rejected many candidates on
+  conflict/meaning grounds — notably **Setta** alone = "sect/cult" in Italian (so the app
+  name must stay the full word "Avosetta", never shortened in branding). Full rationale +
+  all rejects in the `handoff_avosetta` memory (aka `naming-avosetta`).
+- **Mascot: Klueta, nickname "Chloe"** — a clumsy-cute female chibi avocet. Name from Dutch
+  *Kluut* (the avocet's call) + a "klutz" wink.
+- **Serilee** (pied kingfisher) — RESERVED for a future app; do not reuse here.
+- **Code rename DONE + verified:** `com.afluffywaffle.distesa` → `com.afluffywaffle.avosetta`
+  (dev `.avosetta.dev`), namespace, `android:label`, `git mv` of the whole source tree
+  (incl. `eink/`), settings.gradle rootProject.name, README/SECURITY. Commits `5f88b4b`
+  (rename) + `1bb1053` (icon), merged via `6e65d77`. Built green, installed + launched on the
+  **Nomad** `SN078C10005528`, stale `distesa.dev` uninstalled from device.
+- **App icon = Chloe** (chibi avocet). New `res/mipmap-*/ic_launcher(.|_round).png` at all
+  densities + manifest `android:icon`/`roundIcon` (app previously had NO icon → default robot).
+- **Chloe is now her own private repo:** `~/Develop/Chloe/` (git `main`, initial commit) with
+  CLAUDE.md, HANDOFF.md, `assets/stickers/` (14 poses), `assets/reference/` (canonical v5),
+  `tools/gen_stickers.py`, `.gitignore` (blocks the API key). NOT pushed to any remote.
+
+### Icon/art workflow (reusable)
+- Images generated via **OpenRouter** (user's credits), model `google/gemini-3-pro-image`,
+  chat-completions + `"modalities":["image","text"]`, image returned as base64 data-URL in
+  `choices[0].message.images[0].image_url.url`. Key read from a file, NEVER echoed/committed.
+- **Consistency = image-to-image:** pass an existing PNG back in as `image_url` + an edit
+  instruction (keeps the character; also does surgical edits). Chloe canon: **beak NOT a
+  mouth**, B&W only, exactly one bird. See `~/Develop/Chloe/` (tools + CLAUDE.md).
+
+### Left as-is / open
+- Cosmetic leftovers (intentional): SharedPreferences key `"distesa_settings"`, log tags
+  `DistesaMain`/etc., bundled WebExtension id `eink@distesa`. Rename later if desired.
+- **Easter egg (not built):** hide the "how we got the name" story (Distesa→Avosetta + the
+  reserved Serilee bird) in the **Help/About** screen. `04_avo_v3_reading_v5.png` /
+  `chloe_reading` earmarked for the Help / layout-config screen.
+- Soft/rounded **"avosetta" wordmark** — not started.
+- Chloe: iMessage sticker pack on iOS App Store (needs transparent-bg exports); more poses;
+  wire stickers to app states (sleepy=loading, oops=error, hmm=empty, hi=splash).
+- Avosetta naming/icon asset history lives at `~/Desktop/avosetta-progression/`.
+
+### Next session — paste this to start
+
+> Resume the **Avosetta** project, thread **avosetta** (repo `~/Develop/Distesa`, branch
+> `main`, tip `6e65d77`; sibling repo `~/Develop/Chloe`). The Distesa→Avosetta rename + Chloe
+> launcher icon are merged and verified on the Nomad. Read `HANDOFF.md` → `## Thread: avosetta`
+> and the `handoff_avosetta` memory first. Next up (pick one): build the **Help/About "how we
+> got the name" easter egg** (Distesa→Avosetta + reserved Serilee), design the soft **"avosetta"
+> wordmark**, or expand **Chloe** (more sticker poses / transparent-bg exports for an iMessage
+> pack) in `~/Develop/Chloe`.
