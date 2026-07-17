@@ -234,7 +234,7 @@ class LayoutActivity : Activity() {
                 paneHelp(p, "⌕  Address bar", "Reveals the toolbar so you can type a URL or search, go back, refresh, etc.")
                 paneHelp(p, "←  Back", "Goes to the previous page in history.")
                 paneHelp(p, "⟳  Refresh", "Reloads the current page.")
-                paneHelp(p, "⊟  Collapse", "Shrinks every image on the page to a small chip (tap again to expand). Keeps pages light and fast on e-ink; doesn't change the site.")
+                paneHelp(p, "⊟ / ⊞  Collapse", "Toggles every image on the page: ⊟ shrinks them to small chips, ⊞ expands them back to full boxes. Keeps pages light and fast on e-ink; doesn't change the site.")
                 paneHelp(p, "·  None", "Leaves the slot empty.")
             },
             "Navigation rails" to { p ->
