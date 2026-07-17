@@ -33,5 +33,17 @@
             android:exported="false"
             android:label="Layout"
             android:configChanges="orientation|screenSize|keyboardHidden" />
+
+        <activity
+            android:name=".RenderingActivity"
+            android:exported="false"
+            android:label="Rendering"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
+        <activity
+            android:name=".SupernoteActivity"
+            android:exported="false"
+            android:label="Supernote"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
     </application>
 </manifest>

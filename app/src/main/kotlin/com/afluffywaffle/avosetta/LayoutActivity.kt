@@ -2,6 +2,7 @@ package com.afluffywaffle.avosetta
 
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Canvas
 import android.graphics.Color
@@ -11,8 +12,11 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.content.res.ColorStateList
 import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.afluffywaffle.avosetta.eink.GlobeSearchDrawable
@@ -36,6 +40,8 @@ class LayoutActivity : Activity() {
     private lateinit var prefs: SharedPreferences
 
     private var navPlacement = "both"
+    private var navStyle = "inset"       // "inset" (rails narrow the page) | "overlay" (rails float over it)
+    private var showZones = true         // draw the faint chevron affordance on the rails
     private var chromePos = "auto"
     private var edgeSlotLeftTop = "none"
     private var edgeSlotLeftBottom = "chrome"
@@ -57,6 +63,8 @@ class LayoutActivity : Activity() {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("distesa_settings", MODE_PRIVATE)
         navPlacement = prefs.getString("navPlacement", "both") ?: "both"
+        navStyle = prefs.getString("navStyle", "inset") ?: "inset"
+        showZones = prefs.getBoolean("showZones", true)
         chromePos = prefs.getString("chromePos", "auto") ?: "auto"
         edgeSlotLeftTop = prefs.getString("edgeSlotLeftTop", "none") ?: "none"
         edgeSlotLeftBottom = prefs.getString("edgeSlotLeftBottom", "chrome") ?: "chrome"
@@ -87,6 +95,50 @@ class LayoutActivity : Activity() {
             textSize = 18f
             setOnClickListener { finish() }
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        // "⌗" opens the Rendering page (block fonts / tracking protection / JavaScript —
+        // each explained, with a performance/rendering-dependency table). Leftmost of the
+        // three bordered buttons.
+        topBar.addView(Button(this).apply {
+            text = "⌗"
+            setTextColor(MainActivity.CHROME_INK)
+            background = borderBg()
+            gravity = Gravity.CENTER
+            textSize = 20f
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+            setOnClickListener { startActivity(Intent(this@LayoutActivity, RenderingActivity::class.java)) }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            rightMargin = dp(8)
+        })
+        // Device icon opens the Supernote page (e-ink tuning: image auto-collapse +
+        // full-clear cadence). Drawn B&W e-reader silhouette, monochrome like the rest.
+        topBar.addView(ImageButton(this).apply {
+            setImageResource(R.drawable.ic_supernote)
+            imageTintList = ColorStateList.valueOf(MainActivity.CHROME_INK)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            background = borderBg()
+            setPadding(dp(22), dp(11), dp(22), dp(11))
+            contentDescription = "Supernote"
+            setOnClickListener { startActivity(Intent(this@LayoutActivity, SupernoteActivity::class.java)) }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            rightMargin = dp(8)
+        })
+        // Puzzle-piece icon opens the Extensions page (bundled WebExtensions on/off — the
+        // only thing left in the classic settings list). A drawn B&W jigsaw piece rather
+        // than the 🧩 emoji, which renders in colour and breaks the monochrome top bar.
+        // Sits just left of the ? help button.
+        topBar.addView(ImageButton(this).apply {
+            setImageResource(R.drawable.ic_puzzle)
+            imageTintList = ColorStateList.valueOf(MainActivity.CHROME_INK)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            background = borderBg()
+            // Match the ? / ⌗ text buttons: same border, similar footprint. Extra vertical
+            // padding lands the ~24dp icon near the 20sp glyphs' cap height.
+            setPadding(dp(22), dp(11), dp(22), dp(11))
+            contentDescription = "Extensions"
+            setOnClickListener { startActivity(Intent(this@LayoutActivity, SettingsActivity::class.java)) }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            rightMargin = dp(8)
+        })
         topBar.addView(Button(this).apply {
             text = "?"
             setTextColor(MainActivity.CHROME_INK)
@@ -356,12 +408,33 @@ class LayoutActivity : Activity() {
                     render()
                 }
             }
-            // Scroll direction only applies where there are chevron rails to page with.
+            // Style + scroll direction only apply where there are rails on the edges.
             if (navPlacement != "none") {
+                // Inset = rails claim their own strip and narrow the page; overlay = rails
+                // float over the page edge so nothing is squeezed. Radio over navStyle.
+                paneSubhead(pane, "Style")
+                val styles = listOf("inset" to "Inset (narrow page)", "overlay" to "Overlay (float over)")
+                for ((value, label) in styles) paneRow(pane, value == navStyle, true, label) {
+                    if (navStyle != value) {
+                        navStyle = value
+                        prefs.edit().putString("navStyle", value).apply()
+                        preview.invalidate()
+                        render()
+                    }
+                }
                 paneSubhead(pane, "Scroll direction")
                 paneRow(pane, naturalScroll, false, "Natural") {
                     naturalScroll = !naturalScroll
                     prefs.edit().putBoolean("naturalScroll", naturalScroll).apply()
+                    render()
+                }
+                // The faint chevron affordance drawn on the rails while browsing. A
+                // checkbox (not a radio): it's an independent on/off, not one-of-many.
+                paneSubhead(pane, "Tap zones")
+                paneRow(pane, showZones, false, "Show tap zones") {
+                    showZones = !showZones
+                    prefs.edit().putBoolean("showZones", showZones).apply()
+                    preview.invalidate()
                     render()
                 }
             }
@@ -484,6 +557,20 @@ class LayoutActivity : Activity() {
             color = MainActivity.CHROME_INK; textAlign = Paint.Align.LEFT; textSize = dp(13f)
         }
         private val globe = GlobeSearchDrawable(Color.rgb(120, 120, 120), 0xFFFAFAFA.toInt(), dp(24))
+        // Vector icons for the settings-launcher actions (drawn, tinted per-call at draw
+        // time since slots and the chrome bar use different ink shades).
+        private val supernoteIcon = androidx.core.content.ContextCompat.getDrawable(context, R.drawable.ic_supernote)?.mutate()
+        private val puzzleIcon = androidx.core.content.ContextCompat.getDrawable(context, R.drawable.ic_puzzle)?.mutate()
+        private fun iconFor(id: String) = when (id) {
+            "supernote" -> supernoteIcon
+            "extensions" -> puzzleIcon
+            else -> null
+        }
+        private fun drawIcon(canvas: Canvas, d: android.graphics.drawable.Drawable, cx: Float, cy: Float, half: Float, tint: Int) {
+            d.setTint(tint)
+            d.setBounds((cx - half).toInt(), (cy - half).toInt(), (cx + half).toInt(), (cy + half).toInt())
+            d.draw(canvas)
+        }
         // Match the real chrome bar (buildChromeBar): #FAFAFA fill + 2px #555 border.
         private val chromeFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFAFAFA.toInt(); style = Paint.Style.FILL }
         private val chromeBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -642,6 +729,7 @@ class LayoutActivity : Activity() {
         /** Draw a chrome-bar button glyph centred at (cx, midY). ⚙ is the fixed settings
          *  button; everything else renders its shared catalog glyph. */
         private fun drawChromeGlyph(canvas: Canvas, fn: String, cx: Float, midY: Float) {
+            iconFor(fn)?.let { drawIcon(canvas, it, cx, midY, dp(11f), MainActivity.CHROME_INK); return }
             val g = if (fn == "gear") "⚙" else NavActions.glyph(fn)
             if (g.isEmpty()) return
             glyphPaint.color = MainActivity.CHROME_INK // dark ink, like the real bar
@@ -669,12 +757,13 @@ class LayoutActivity : Activity() {
                 canvas.drawRoundRect(r.left + m, r.top + m, r.right - m, r.bottom - m, dp(6f), dp(6f), placeholderPaint)
                 return
             }
-            if (slot == "chrome") { // the only non-text glyph — a drawn globe+magnifier
+            if (slot == "chrome") { // a drawn globe+magnifier
                 val s = dp(12f)
                 globe.setBounds((cx - s).toInt(), (cy - s).toInt(), (cx + s).toInt(), (cy + s).toInt())
                 globe.draw(canvas)
                 return
             }
+            iconFor(slot)?.let { drawIcon(canvas, it, cx, cy, dp(12f), Color.rgb(120, 120, 120)); return }
             // Every other function renders its shared catalog glyph (back a touch larger).
             glyphPaint.textSize = if (slot == "back") dp(24f) else dp(18f)
             canvas.drawText(NavActions.glyph(slot), cx, cy + dp(7f), glyphPaint)

@@ -1,0 +1,18 @@
+<!--
+  A portrait e-reader / tablet — the "Supernote (device) settings" mark. Solid black
+  silhouette with the screen and a home dot knocked out (evenOdd), so it stays monochrome
+  on e-ink and matches the drawn puzzle piece rather than a colour emoji. Tinted to
+  CHROME_INK at runtime.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#000000"
+        android:fillType="evenOdd"
+        android:pathData="M7,2 L17,2 Q19,2 19,4 L19,20 Q19,22 17,22 L7,22 Q5,22 5,20 L5,4 Q5,2 7,2 Z
+                          M8,4.5 L16,4.5 Q17,4.5 17,5.5 L17,16.5 Q17,17.5 16,17.5 L8,17.5 Q7,17.5 7,16.5 L7,5.5 Q7,4.5 8,4.5 Z
+                          M12.85,19.75 A0.85,0.85 0 1 0 11.15,19.75 A0.85,0.85 0 1 0 12.85,19.75 Z" />
+</vector>

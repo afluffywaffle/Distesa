@@ -22,6 +22,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import androidx.appcompat.widget.SwitchCompat
+import androidx.core.content.ContextCompat
 import com.afluffywaffle.avosetta.eink.EdgeNavView
 import java.net.URLEncoder
 import kotlin.math.hypot
@@ -412,7 +413,8 @@ class MainActivity : Activity() {
             "collapse" -> if (imagesCollapsed) "⊞" else "⊟"
             "back" -> "←"
             "refresh" -> "⟳"
-            else -> "" // chrome uses a drawn globe+magnifier icon, not a glyph
+            "rendering", "zap", "undozap", "resetzap" -> NavActions.glyph(slot)
+            else -> "" // chrome (globe drawable) + supernote/extensions (vector icons)
         }
         return Button(this).apply {
             text = glyph
@@ -431,15 +433,30 @@ class MainActivity : Activity() {
             // address" and "search". A drawn globe-with-magnifier says both; a font glyph
             // can't overlap the two, so use a centred foreground Drawable. Sized to sit in
             // the sliver like the text glyphs (~dp26), same faint grey as the chevrons.
-            if (slot != "collapse" && slot != "back" && slot != "refresh") {
-                foreground = GlobeSearchDrawable(Color.rgb(120, 120, 120), 0xFFFAFAFA.toInt(), dp(26))
-                foregroundGravity = Gravity.CENTER
+            when (slot) {
+                "chrome" -> {
+                    foreground = GlobeSearchDrawable(Color.rgb(120, 120, 120), 0xFFFAFAFA.toInt(), dp(26))
+                    foregroundGravity = Gravity.CENTER
+                }
+                "supernote", "extensions" -> {
+                    // Same drawn B&W icon as the layout-editor top bar, tinted to the faint
+                    // rail ink so it sits with the chevrons.
+                    foreground = ContextCompat.getDrawable(this@MainActivity, NavActions.iconRes(slot)!!)
+                        ?.mutate()?.apply { setTint(Color.rgb(120, 120, 120)) }
+                    foregroundGravity = Gravity.CENTER
+                }
             }
             setOnClickListener {
                 when (slot) {
                     "collapse" -> { onToggleCollapse(); text = if (imagesCollapsed) "⊞" else "⊟" }
                     "back" -> if (::session.isInitialized && canGoBack) session.goBack()
                     "refresh" -> if (::session.isInitialized) { session.reload(); afterNav() }
+                    "rendering" -> startActivity(Intent(this@MainActivity, RenderingActivity::class.java))
+                    "supernote" -> startActivity(Intent(this@MainActivity, SupernoteActivity::class.java))
+                    "extensions" -> startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
+                    "zap" -> onArmZap()
+                    "undozap" -> postToExtension("undoZap")
+                    "resetzap" -> postToExtension("resetZaps")
                     else -> toggleChrome()
                 }
             }
@@ -647,7 +664,45 @@ class MainActivity : Activity() {
             textSize = 20f
             setOnClickListener { onToggleCollapse() }
         }.also { collapseBtn = it }
+        // Settings-page launchers. Rendering is a ⌗ glyph; Supernote / Extensions carry
+        // their drawn B&W icons (same as the layout-editor top bar), tinted to chrome ink.
+        "rendering" -> Button(this).apply {
+            text = "⌗"
+            setTextColor(CHROME_INK)
+            setBackgroundColor(Color.TRANSPARENT)
+            textSize = 20f
+            setOnClickListener { startActivity(Intent(this@MainActivity, RenderingActivity::class.java)) }
+        }
+        "supernote" -> iconChromeButton(R.drawable.ic_supernote) {
+            startActivity(Intent(this@MainActivity, SupernoteActivity::class.java))
+        }
+        "extensions" -> iconChromeButton(R.drawable.ic_puzzle) {
+            startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
+        }
+        "zap", "undozap", "resetzap" -> Button(this).apply {
+            text = NavActions.glyph(fn)
+            setTextColor(CHROME_INK)
+            setBackgroundColor(Color.TRANSPARENT)
+            textSize = 20f
+            setOnClickListener {
+                when (fn) {
+                    "zap" -> onArmZap()
+                    "undozap" -> postToExtension("undoZap")
+                    else -> postToExtension("resetZaps")
+                }
+            }
+        }
         else -> null
+    }
+
+    /** A chrome-bar slot whose mark is a drawn vector icon rather than a font glyph. */
+    private fun iconChromeButton(iconRes: Int, onClick: () -> Unit): Button = Button(this).apply {
+        text = ""
+        setBackgroundColor(Color.TRANSPARENT)
+        foreground = ContextCompat.getDrawable(this@MainActivity, iconRes)
+            ?.mutate()?.apply { setTint(CHROME_INK) }
+        foregroundGravity = Gravity.CENTER
+        setOnClickListener { onClick() }
     }
 
     private fun toggleChrome() {
@@ -1068,56 +1123,47 @@ class MainActivity : Activity() {
             setPadding(dp(16), dp(12), dp(16), dp(12))
             visibility = View.GONE
         }
-        // QUICK panel = the handful of controls toggled often. Everything else
-        // lives on the dedicated SettingsActivity ("More settings…").
+        // QUICK panel = the handful of per-page/per-site controls toggled often. Toolbar
+        // position moved to the visual editor; Animations off moved to the Rendering page;
+        // the zap actions are also in the button catalog now (assignable to any slot).
         //
-        // Toolbar position — the plain, obvious control the user asked for.
-        panel.addView(makeCycleRow({ "Toolbar position: ${chromePos.replaceFirstChar { it.uppercase() }}" }) {
-            chromePos = when (chromePos) { "auto" -> "top"; "top" -> "bottom"; else -> "auto" }
-            prefs.edit().putString("chromePos", chromePos).apply()
-            recreate() // structural: rebuild at the new edge
-        })
-        panel.addView(makeSwitch("Animations off", animOff) { on ->
-            animOff = on; prefs.edit().putBoolean("animOff", on).apply(); pushSettingsToExtension()
-        })
-        // Image policy cycle (per-domain; content script persists + reloads).
+        // Image policy cycle (per-domain; content script persists + reloads). NOTE: the
+        // "Images: …" label is ambiguous and this control is due for a rethink — kept here
+        // as-is for now.
         imgToggle = makeButton("Images: …") { onCycleImagePolicy() }.apply { isEnabled = false }
         panel.addView(imgToggle)
-        // Element zapper: arm picker mode, hide chrome, next page tap hides that
-        // element (persisted per-site). Kills inline JS players / furniture that
-        // has no src for a network/embed rule to match.
+
+        // Element zapper group — arm/undo/reset, fenced off with dividers so the
+        // destructive-ish "hide" actions read as one cluster.
+        panel.addView(panelDivider())
+        // Zap: arm picker mode, hide chrome, next page tap hides that element (persisted
+        // per-site). Kills inline JS players / furniture with no src for a rule to match.
         panel.addView(makeButton("⬡ Zap element (hide)") { onArmZap() })
         // Undo / reset — a mis-tapped zap otherwise hides part of a site permanently
         // with no recovery. Undo pops the last zap for this host; reset clears them all.
         panel.addView(makeButton("↺ Undo last zap") { postToExtension("undoZap") })
         panel.addView(makeButton("Reset zaps (this site)") { postToExtension("resetZaps") })
-        // Everything else moved to the dedicated page.
+        panel.addView(panelDivider())
+
+        // The visual layout editor is the main settings screen now; it has a "…" button
+        // to the classic settings list for the remaining toggles.
         panel.addView(makeButton("More settings…") {
             settingsPanel.visibility = View.GONE
-            startActivity(Intent(this, SettingsActivity::class.java))
+            startActivity(Intent(this, LayoutActivity::class.java))
         })
         return panel
     }
 
-    /** Boolean row as an explicit ☑/☐ + ON/OFF glyph — legible on grayscale e-ink
-     *  where a SwitchCompat thumb/tint is not. Matches SettingsActivity. */
-    private fun makeSwitch(label: String, initial: Boolean, onChange: (Boolean) -> Unit): Button {
-        var state = initial
-        fun render(): String = (if (state) "☑  " else "☐  ") + label + (if (state) "   · ON" else "   · OFF")
-        return makeButton(render()) {}.apply {
-            setOnClickListener { state = !state; text = render(); onChange(state) }
+    /** A hairline divider used to fence off groups within the quick-settings panel. */
+    private fun panelDivider(): View = View(this).apply {
+        setBackgroundColor(0x33000000)
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)).apply {
+            topMargin = dp(6); bottomMargin = dp(6)
         }
     }
 
     private fun makeButton(label: String, onClick: () -> Unit): Button =
         Button(this).apply { text = label; setTextColor(CHROME_INK); setBackgroundColor(Color.TRANSPARENT); setOnClickListener { onClick() } }
-
-    /** A button whose label is re-read from [label] after each tap (cycle control). */
-    private fun makeCycleRow(label: () -> String, onClick: () -> Unit): Button {
-        val b = makeButton(label(), {})
-        b.setOnClickListener { onClick(); b.text = label() }
-        return b
-    }
 
     private fun applyTrackingProtection(strict: Boolean) {
         try {
