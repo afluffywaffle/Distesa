@@ -1,4 +1,4 @@
-package com.afluffywaffle.distesa.eink
+package com.afluffywaffle.avosetta.eink
 
 import android.view.View
 

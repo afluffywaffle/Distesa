@@ -408,6 +408,15 @@ rules, DNS diagnosis. **Read it first for any future Supernote work.**
   chrome. (Small change: `urlField.requestFocus()` + showSoftInput in the reveal path —
   but consider that the user may reveal chrome just to hit Back/⟳, so maybe only
   auto-focus on a dedicated "address" affordance, not every reveal.)
+- **Rename Distesa → Avosetta + icon (NEW backlog, 2026-07-17):** app is being renamed
+  from "Distesa" to **Avosetta** (the avocet). Mascot = **Klueta** (nickname **"Chloe"**),
+  a clumsy-cute female chibi avocet; **Serilee** (pied kingfisher) is RESERVED for a future app. Full naming/icon
+  progression + rationale saved at `~/Desktop/avosetta-progression/` (and in the
+  `naming-avosetta` memory). Icon direction: minimal single-line e-ink mark (v4) as the
+  app icon + chibi "Avo" as the marketing mascot. TODO: (1) rename in code — package
+  `com.afluffywaffle.distesa` → avosetta, app label, strings; (2) finalize icon;
+  (3) **easter egg** — hide the "how we got the name" story (Distesa → Avosetta, and the
+  reserved Serilee bird) somewhere in the **Help/About** screen.
 - **Credentials / password managers (NEW backlog):** stance = store nothing. Preferred
   path is a **WebExtension password manager** (Bitwarden) since Supernote has no
   configured autofill + no GMS (measured: `autofill_service` empty). **Blocker:** Distesa
