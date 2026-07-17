@@ -5,24 +5,50 @@ Threads: `phase1` (Distesa Phase-1 UI/media/settings + naming)
 ---
 
 ## Thread: phase1
-_Updated 2026-07-17 (session h)_
+_Updated 2026-07-17 (session i)_
 
 ### Next session — paste this to start
 
 > Resume Distesa, thread **phase1** (repo `~/Develop/Distesa`, branch `main`, tip
-> `88f9a4d` — pushed, origin in sync). Session h fixed the Chrome-focus→Settings
-> IME-dismiss bug (backlog item 3): the ⚙ gear now calls `dismissAddressIme()` before
-> showing the quick panel, so a focused address bar's keyboard is dismissed instead of
-> covering the panel — verified on the Nomad. Read `HANDOFF.md` → `## Thread: phase1`
-> (session h) and the `handoff_phase1` memory; also read
-> `~/Develop/supernote-dev-reference/README.md` AND `Epd.kt`'s "prior approaches tried
-> and abandoned" notes before any Supernote/refresh work. Devices: Nomad
+> `1244a74` — committed locally, **NOT yet pushed**). Session i was UI polish on the
+> edge-nav rail: fused it into one continuous rounded capsule (outline drawn by
+> `EdgeNavView` behind the buttons, floating divider above the bottom cap), made the
+> bottom slot a self-contained floating button with its own border, and swapped the back
+> glyph from a thin `‹` chevron to a traditional leftwards arrow with a tail (`←`, 26sp
+> bold so it reads at e-ink contrast); Settings back label now `← Back`. Verified on the
+> Nomad. Read `HANDOFF.md` → `## Thread: phase1` (session i) and the `handoff_phase1`
+> memory; also read `~/Develop/supernote-dev-reference/README.md` AND `Epd.kt`'s "prior
+> approaches tried and abandoned" notes before any Supernote/refresh work. Devices: Nomad
 > `SN078C10005528` @ `100.67.164.61:5555` (also USB), Manta `SN100C10008955` @
 > `100.98.2.91:5555`; adb at `~/Library/Android/sdk/platform-tools/adb`; package
 > `com.afluffywaffle.distesa.dev`; build `./gradlew installDebug` (if install throws
 > `EOF` with both USB+Tailscale entries of one device attached, `adb -s <serial> install
-> -r app/build/outputs/apk/debug/app-debug.apk` instead). First task: pick the next
-> backlog item with the user — the named session-e/f backlog is now cleared.
+> -r app/build/outputs/apk/debug/app-debug.apk` instead). First task: **push `1244a74`**,
+> then pick the next backlog item with the user (named session-e/f backlog is cleared;
+> parked: divider-hairline length tune + chrome-slot-guard persistence + Settings-page UX
+> overhaul, task #1).
+
+### Session 2026-07-17 (i): edge-nav capsule redesign polish + traditional back arrow — COMMITTED (`1244a74`, not pushed)
+
+UI polish pass on the edge-nav rail, verified on the **Nomad** (`SN078C10005528`).
+
+- **Fused single capsule.** The rail is now one continuous rounded capsule; the outline
+  is drawn by `EdgeNavView` behind the buttons, with a floating divider hairline above
+  the bottom cap.
+- **Floating bottom button.** The bottom slot is a self-contained floating button with
+  its own border (no longer sharing/butting the capsule wall).
+- **Back glyph → traditional arrow.** Swapped the thin `‹` chevron for a leftwards arrow
+  with a tail (`←`), sized 26sp + BOLD (vs 20sp for other slots) so it reads with the
+  same weight as the drawn chevrons at e-ink contrast. `SettingsActivity` back label
+  follows: `← Back`. (Intermediate `❮` was tried and rejected as still chevron-like.)
+
+**Files:** `MainActivity.kt` (capsule span/draw, floating button border, back-slot glyph
++ per-slot 26sp/bold), `eink/EdgeNavView.kt` (capsule outline + divider), `SettingsActivity.kt`
+(`← Back` label). Compiles clean; verified on-device (screenshots), defaults restored.
+
+**Next:** push `1244a74`; then pick next backlog item with user.
+
+---
 
 ### Session 2026-07-17 (h): Chrome-focus→Settings IME-dismiss bug — FIXED + PUSHED (`88f9a4d`)
 
