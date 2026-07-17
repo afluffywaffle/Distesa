@@ -5,7 +5,60 @@ Threads: `phase1` (Distesa Phase-1 UI/media/settings + naming)
 ---
 
 ## Thread: phase1
-_Updated 2026-07-16 (session g)_
+_Updated 2026-07-17 (session h)_
+
+### Next session — paste this to start
+
+> Resume Distesa, thread **phase1** (repo `~/Develop/Distesa`, branch `main`, tip
+> `88f9a4d` — pushed, origin in sync). Session h fixed the Chrome-focus→Settings
+> IME-dismiss bug (backlog item 3): the ⚙ gear now calls `dismissAddressIme()` before
+> showing the quick panel, so a focused address bar's keyboard is dismissed instead of
+> covering the panel — verified on the Nomad. Read `HANDOFF.md` → `## Thread: phase1`
+> (session h) and the `handoff_phase1` memory; also read
+> `~/Develop/supernote-dev-reference/README.md` AND `Epd.kt`'s "prior approaches tried
+> and abandoned" notes before any Supernote/refresh work. Devices: Nomad
+> `SN078C10005528` @ `100.67.164.61:5555` (also USB), Manta `SN100C10008955` @
+> `100.98.2.91:5555`; adb at `~/Library/Android/sdk/platform-tools/adb`; package
+> `com.afluffywaffle.distesa.dev`; build `./gradlew installDebug` (if install throws
+> `EOF` with both USB+Tailscale entries of one device attached, `adb -s <serial> install
+> -r app/build/outputs/apk/debug/app-debug.apk` instead). First task: pick the next
+> backlog item with the user — the named session-e/f backlog is now cleared.
+
+### Session 2026-07-17 (h): Chrome-focus→Settings IME-dismiss bug — FIXED + PUSHED (`88f9a4d`)
+
+Cleared backlog item 3 (logged session f). Fixed + verified on the **Nomad**
+(`SN078C10005528`, also USB). `main` pushed — origin in sync.
+
+**Bug:** with the address bar auto-focused (IME up), tapping the ⚙ gear showed the quick
+settings panel *underneath* the still-present keyboard overlay — the IME never dismissed.
+
+**Root cause (diagnosed via an Explore subagent over `MainActivity.kt`):** the gear
+`setOnClickListener` was a pure `settingsPanel.visibility` toggle. It never cleared the
+field's focus and never called `hideSoftInputFromWindow` — the focus-clear + IME-hide hook
+lives only in `hideChrome()`, which the gear path skipped. Because focus was retained, the
+blur branch (restore edge nav, drop the chrome lift) also never ran.
+
+**Fix (`88f9a4d`, `MainActivity.kt`, +17/−2):**
+- Extracted `dismissAddressIme()` — `urlField.clearFocus()` + `hideSoftInputFromWindow`,
+  guarded by `::urlField.isInitialized`, safe to call when the IME is already down.
+  `hideChrome()` now reuses it (was inline before).
+- The gear handler computes `show = settingsPanel.visibility != VISIBLE` and calls
+  `dismissAddressIme()` **before** showing the panel. Clearing focus fires `urlField`'s
+  blur branch, which restores the edge nav and drops the IME lift for free.
+
+**Verified on-device:** user confirms fixed — gear now dismisses the keyboard and shows the
+quick panel unobscured. (Oracle used during dev: `dumpsys input_method | grep mInputShown`;
+the native chrome/slivers are drawn on a separate overlay surface so they do NOT appear in
+`uiautomator dump` — can't script taps on them, human drives the physical taps.)
+
+**Build gotcha (new):** `./gradlew installDebug` failed with `InstallException: EOF` because
+both a USB and a Tailscale entry for the **same** Nomad were attached (gradle tried to install
+to both). Workaround: `adb -s SN078C10005528 install -r app/build/outputs/apk/debug/app-debug.apk`.
+Compile itself was clean.
+
+**Next:** session-e/f backlog is cleared — pick the next item with the user.
+
+---
 
 ### Session 2026-07-16 (g): NATIVE scroll + native EPD refresh — COMMITTED + PUSHED (`8843643`)
 
