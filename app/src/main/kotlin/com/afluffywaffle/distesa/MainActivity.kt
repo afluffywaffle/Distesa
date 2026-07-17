@@ -73,6 +73,9 @@ class MainActivity : Activity() {
     private lateinit var chromeBar: LinearLayout
     private lateinit var urlField: EditText
     private lateinit var backBtn: Button
+    // A "go" (→) affordance that appears in the address bar only while the field is
+    // focused, so novices who don't know to press Enter have a visible submit control.
+    private var goBtn: Button? = null
     private var canGoBack = false
     private var currentUrl: String? = null
     private val ui = Handler(Looper.getMainLooper())
@@ -84,7 +87,15 @@ class MainActivity : Activity() {
     private var navPlacement = "both"    // "both" | "left" | "right" | "none"
     private var showZones = true         // draw the faint chevron affordance
     private var chromePos = "auto"       // "auto" | "top" | "bottom"
+    // Paging direction. true (default) = NATURAL: pressing the UP chevron moves the page
+    // content UP (advance/forward), matching a touchscreen drag — the direction you press
+    // is the direction the page travels. false = SCROLLBAR: up = back, down = forward (the
+    // page behaves like a dragged scrollbar thumb). Inverts flipPage's frac sign.
+    private var naturalScroll = true
     private var searchEngine = "DuckDuckGo"
+    // Custom search: a URL template with "%s" where the query goes, used when
+    // searchEngine == "Custom" (see submitUrl / SEARCH_ENGINES + the layout editor).
+    private var customSearchUrl = ""
     private var leftStrip: EdgeNavView? = null
     private var rightStrip: EdgeNavView? = null
     // Bottom-of-strip sliver buttons (☰/⊟), tracked so they can be hidden with the
@@ -109,7 +120,7 @@ class MainActivity : Activity() {
     // the chrome sliver (⌕). Since chrome is hidden by default, this makes the sliver a
     // one-tap "type an address" affordance; back/⟳ stay reachable on the revealed bar
     // (and can be put on the other sliver). Never fires on the idle-timer reveal.
-    private var autoFocusOnReveal = true
+    private var autoFocusOnReveal = false
 
     // E-ink performance levers (persisted in SharedPreferences; see loadSettings()).
     private var animOff = true          // inject animation/transition-killing CSS
@@ -129,9 +140,12 @@ class MainActivity : Activity() {
     // content script via pushSettingsToExtension().
     private var collapseMode = "auto"
     private var collapseThreshold = 6
-    // Where the per-page collapse toggle lives. Only "chrome" is wired today; the
-    // key exists so alternate placements can be added without a schema change.
-    private var collapseBtnPlacement = "chrome"
+    // Configurable chrome-bar button slots — like the edge slivers, each picks a
+    // function from {back, refresh, collapse, none}. Layout is [left] url [right1][right2]
+    // ⚙, where ⚙ (settings) is fixed and always present so settings is never stranded.
+    private var chromeBtnLeft = "back"
+    private var chromeBtnRight1 = "refresh"
+    private var chromeBtnRight2 = "collapse"
 
     // Load-time measurement.
     private var pageStartMs = 0L
@@ -323,7 +337,12 @@ class MainActivity : Activity() {
             this, showZones,
             capReservePx = if (hasBottomSliver) sliverPx else 0,
             capReserveTopPx = if (hasTopSliver) sliverPx else 0,
-            onNext = { flipPage("next") }, onPrev = { flipPage("prev") },
+            // Interface-level inversion only: the scroll mechanism ([flipPage]) is
+            // untouched. NATURAL (default) maps the UPPER zone / up-chevron to "next"
+            // (page content travels up, matching the chevron), the lower zone to "prev".
+            // SCROLLBAR mode keeps the classic upper=prev / lower=next mapping.
+            onNext = { flipPage(if (naturalScroll) "prev" else "next") },
+            onPrev = { flipPage(if (naturalScroll) "next" else "prev") },
         )
         root.addView(
             strip,
@@ -503,16 +522,6 @@ class MainActivity : Activity() {
             // the address field is focused (then it's pinned open).
             setOnTouchListener { _, _ -> if (!urlField.hasFocus()) scheduleAutoHide(); false }
         }
-        backBtn = Button(this).apply {
-            text = "‹"
-            setTextColor(CHROME_INK)
-            setBackgroundColor(Color.TRANSPARENT) // no dark button fill; glyph on light bar
-            textSize = 22f
-            isEnabled = false
-            setOnClickListener {
-                if (::session.isInitialized && canGoBack) { session.goBack(); afterNav() }
-            }
-        }
         urlField = EditText(this).apply {
             setTextColor(CHROME_INK)
             setHintTextColor(0xFF777777.toInt())
@@ -551,6 +560,7 @@ class MainActivity : Activity() {
             setOnFocusChangeListener { _, hasFocus ->
                 if (hasFocus) {
                     ui.removeCallbacks(autoHide)
+                    goBtn?.visibility = View.VISIBLE // reveal the → submit affordance
                     // Explicitly show + bind the IME to this field: adjustNothing
                     // suppresses the auto-show, otherwise the served view stays on the
                     // DecorView and typing never reaches us. Once the IME is up, the
@@ -564,28 +574,12 @@ class MainActivity : Activity() {
                     ui.removeCallbacks(imePoll); ui.post(imePoll)
                 } else {
                     ui.removeCallbacks(imePoll)
+                    goBtn?.visibility = View.GONE
                     liftChromeForIme(0)
                     setEdgeNavHidden(false) // restore the edge strips/slivers the IME hid
                     scheduleAutoHide()
                 }
             }
-        }
-        val reloadBtn = Button(this).apply {
-            text = "⟳"
-            setTextColor(CHROME_INK)
-            setBackgroundColor(Color.TRANSPARENT)
-            textSize = 20f
-            setOnClickListener { if (::session.isInitialized) { session.reload(); afterNav() } }
-        }
-        // Page-level collapse/expand-all: flip every placeholder on THIS page
-        // between tiny chips and full boxes, without changing the site's saved
-        // policy. ⊟ = collapse to chips, ⊞ = expand to boxes.
-        collapseBtn = Button(this).apply {
-            text = if (imagesCollapsed) "⊞" else "⊟"
-            setTextColor(CHROME_INK)
-            setBackgroundColor(Color.TRANSPARENT)
-            textSize = 20f
-            setOnClickListener { onToggleCollapse() }
         }
         val gearBtn = Button(this).apply {
             text = "⚙"
@@ -602,21 +596,58 @@ class MainActivity : Activity() {
                 settingsPanel.visibility = if (show) View.VISIBLE else View.GONE
             }
         }
-        bar.addView(backBtn)
-        bar.addView(urlField, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        bar.addView(reloadBtn)
-        // Collapse-toggle placement scaffold. Only "chrome" is implemented; the
-        // when() is the seam where future placements plug in without touching the
-        // rest of the bar. Do NOT add a UI control to change this yet.
-        when (collapseBtnPlacement) {
-            "chrome" -> collapseBtn?.let { bar.addView(it) }
-            else -> {
-                // TODO future collapse-button placements (floating overlay, edge
-                // gesture, hidden). Leave the button un-added so the bar stays clean.
-            }
+        // A contextual → submit button, hidden until the field is focused (see the
+        // focus listener). Sits right after the url field, before the config slots.
+        goBtn = Button(this).apply {
+            text = "→"
+            setTextColor(CHROME_INK)
+            setBackgroundColor(Color.TRANSPARENT)
+            textSize = 22f
+            visibility = View.GONE
+            setOnClickListener { if (::urlField.isInitialized) submitUrl(urlField.text.toString()) }
         }
+        // [left] url [→] [right1][right2] ⚙ — configurable slots flank the fixed url + gear.
+        makeChromeButton(chromeBtnLeft)?.let { bar.addView(it) }
+        bar.addView(urlField, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        bar.addView(goBtn)
+        makeChromeButton(chromeBtnRight1)?.let { bar.addView(it) }
+        makeChromeButton(chromeBtnRight2)?.let { bar.addView(it) }
         bar.addView(gearBtn)
         return bar
+    }
+
+    /**
+     * Build one configurable chrome-bar button for [fn] ∈ {back, refresh, collapse},
+     * or null for "none". "back" and "collapse" also record their field ([backBtn],
+     * [collapseBtn]) so the existing state hooks (canGoBack enable/hide, collapse-glyph
+     * flip) keep driving them wherever the slot lands.
+     */
+    private fun makeChromeButton(fn: String): Button? = when (fn) {
+        "back" -> Button(this).apply {
+            text = NavActions.glyph("back") // shared catalog glyph (← everywhere)
+            setTextColor(CHROME_INK)
+            setBackgroundColor(Color.TRANSPARENT) // no dark button fill; glyph on light bar
+            textSize = 22f
+            isEnabled = false
+            setOnClickListener { if (::session.isInitialized && canGoBack) { session.goBack(); afterNav() } }
+        }.also { backBtn = it }
+        "refresh" -> Button(this).apply {
+            text = NavActions.glyph("refresh")
+            setTextColor(CHROME_INK)
+            setBackgroundColor(Color.TRANSPARENT)
+            textSize = 20f
+            setOnClickListener { if (::session.isInitialized) { session.reload(); afterNav() } }
+        }
+        // Page-level collapse/expand-all: flip every placeholder on THIS page between
+        // tiny chips and full boxes, without changing the site's saved policy.
+        "collapse" -> Button(this).apply {
+            text = if (imagesCollapsed) "⊞" else "⊟"
+            setTextColor(CHROME_INK)
+            setBackgroundColor(Color.TRANSPARENT)
+            textSize = 20f
+            setOnClickListener { onToggleCollapse() }
+        }.also { collapseBtn = it }
+        else -> null
     }
 
     private fun toggleChrome() {
@@ -810,7 +841,8 @@ class MainActivity : Activity() {
         val uri = if (looksUrl) {
             if (t.startsWith("http://") || t.startsWith("https://")) t else "https://$t"
         } else {
-            val template = SEARCH_ENGINES[searchEngine] ?: SEARCH_ENGINES["DuckDuckGo"]!!
+            val template = if (searchEngine == "Custom" && customSearchUrl.contains("%s")) customSearchUrl
+                else SEARCH_ENGINES[searchEngine] ?: SEARCH_ENGINES["DuckDuckGo"]!!
             template.replace("%s", URLEncoder.encode(t, "UTF-8"))
         }
         if (::session.isInitialized) session.loadUri(uri)
@@ -831,15 +863,19 @@ class MainActivity : Activity() {
         navPlacement = prefs.getString("navPlacement", "both") ?: "both"
         showZones = prefs.getBoolean("showZones", true)
         chromePos = prefs.getString("chromePos", "auto") ?: "auto"
+        naturalScroll = prefs.getBoolean("naturalScroll", true)
         searchEngine = prefs.getString("searchEngine", "DuckDuckGo") ?: "DuckDuckGo"
+        customSearchUrl = prefs.getString("customSearchUrl", "") ?: ""
         collapseMode = prefs.getString("collapseMode", "auto") ?: "auto"
         collapseThreshold = prefs.getInt("collapseThreshold", 6)
-        collapseBtnPlacement = prefs.getString("collapseBtnPlacement", "chrome") ?: "chrome"
+        chromeBtnLeft = prefs.getString("chromeBtnLeft", "back") ?: "back"
+        chromeBtnRight1 = prefs.getString("chromeBtnRight1", "refresh") ?: "refresh"
+        chromeBtnRight2 = prefs.getString("chromeBtnRight2", "collapse") ?: "collapse"
         edgeSlotLeftTop = prefs.getString("edgeSlotLeftTop", "none") ?: "none"
         edgeSlotLeftBottom = prefs.getString("edgeSlotLeftBottom", "chrome") ?: "chrome"
         edgeSlotRightTop = prefs.getString("edgeSlotRightTop", "none") ?: "none"
         edgeSlotRightBottom = prefs.getString("edgeSlotRightBottom", "collapse") ?: "collapse"
-        autoFocusOnReveal = prefs.getBoolean("autoFocusOnReveal", true)
+        autoFocusOnReveal = prefs.getBoolean("autoFocusOnReveal", false)
         // Lockout guard: with tap-to-dismiss and the centre reveal-strip gone, a chrome
         // sliver is the ONLY way to open the toolbar (and thus settings). "left"/"right"
         // (single strip) and "none" (floating button) always guarantee a chrome

@@ -1,6 +1,7 @@
 package com.afluffywaffle.distesa
 
 import android.app.Activity
+import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
@@ -40,10 +41,6 @@ class SettingsActivity : Activity() {
     private var fullEvery = 6
     private var collapseMode = "auto"
     private var collapseThreshold = 6
-    private var edgeSlotLeftTop = "none"
-    private var edgeSlotLeftBottom = "chrome"
-    private var edgeSlotRightTop = "none"
-    private var edgeSlotRightBottom = "collapse"
     private var autoFocusOnReveal = true
 
     private var ublock: WebExtension? = null
@@ -63,11 +60,7 @@ class SettingsActivity : Activity() {
         fullEvery = prefs.getInt("fullEvery", 6)
         collapseMode = prefs.getString("collapseMode", "auto") ?: "auto"
         collapseThreshold = prefs.getInt("collapseThreshold", 6)
-        edgeSlotLeftTop = prefs.getString("edgeSlotLeftTop", "none") ?: "none"
-        edgeSlotLeftBottom = prefs.getString("edgeSlotLeftBottom", "chrome") ?: "chrome"
-        edgeSlotRightTop = prefs.getString("edgeSlotRightTop", "none") ?: "none"
-        edgeSlotRightBottom = prefs.getString("edgeSlotRightBottom", "collapse") ?: "collapse"
-        autoFocusOnReveal = prefs.getBoolean("autoFocusOnReveal", true)
+        autoFocusOnReveal = prefs.getBoolean("autoFocusOnReveal", false)
 
         title = "Distesa settings"
 
@@ -134,39 +127,18 @@ class SettingsActivity : Activity() {
         })
 
         panel.addView(header("Navigation"))
+        // The rails, their four corner buttons, address-bar position, and paging
+        // direction all live in the visual editor now — tap the layout to change it,
+        // instead of cycling abstract rows here.
+        panel.addView(makeButton("Layout & buttons  ›") {
+            startActivity(Intent(this, LayoutActivity::class.java))
+        }.apply { textSize = 16f })
         panel.addView(makeCycleRow({ "Nav zones: $navStyle" }) {
             navStyle = if (navStyle == "inset") "overlay" else "inset"
             prefs.edit().putString("navStyle", navStyle).apply()
         })
-        panel.addView(makeCycleRow({ "Nav side: $navPlacement" }) {
-            navPlacement = when (navPlacement) {
-                "both" -> "left"; "left" -> "right"; "right" -> "none"; else -> "both"
-            }
-            prefs.edit().putString("navPlacement", navPlacement).apply()
-        })
         panel.addView(makeSwitch("Show tap zones", showZones) { on ->
             showZones = on; prefs.edit().putBoolean("showZones", on).apply()
-        })
-        // Edge slivers: a button at the top AND bottom of each nav strip, always visible
-        // even with tap zones off. In single-strip mode ("left"/"right" above) the
-        // bottom slot is always forced to chrome regardless of this setting, so the
-        // toolbar stays reachable; in "both" mode a load-time guard keeps at least one
-        // slot on chrome. With "none" (no strips) chrome is a floating corner button.
-        panel.addView(makeCycleRow({ "Left top button: ${slotLabel(edgeSlotLeftTop)}" }) {
-            edgeSlotLeftTop = nextSlot(edgeSlotLeftTop)
-            prefs.edit().putString("edgeSlotLeftTop", edgeSlotLeftTop).apply()
-        })
-        panel.addView(makeCycleRow({ "Left bottom button: ${slotLabel(edgeSlotLeftBottom)}" }) {
-            edgeSlotLeftBottom = nextSlot(edgeSlotLeftBottom)
-            prefs.edit().putString("edgeSlotLeftBottom", edgeSlotLeftBottom).apply()
-        })
-        panel.addView(makeCycleRow({ "Right top button: ${slotLabel(edgeSlotRightTop)}" }) {
-            edgeSlotRightTop = nextSlot(edgeSlotRightTop)
-            prefs.edit().putString("edgeSlotRightTop", edgeSlotRightTop).apply()
-        })
-        panel.addView(makeCycleRow({ "Right bottom button: ${slotLabel(edgeSlotRightBottom)}" }) {
-            edgeSlotRightBottom = nextSlot(edgeSlotRightBottom)
-            prefs.edit().putString("edgeSlotRightBottom", edgeSlotRightBottom).apply()
         })
         // When the ⌕ sliver reveals the toolbar, also focus the address bar so the user
         // can type immediately. Off = reveal only (for users who open chrome to hit
@@ -232,23 +204,6 @@ class SettingsActivity : Activity() {
 
     private fun cadenceLabel(): String =
         "Full-clear: " + if (fullEvery <= 0) "Off" else fullEvery.toString()
-
-    /** Edge-sliver slot cycle. "favorites" is reserved for a future feature. */
-    private fun nextSlot(slot: String): String = when (slot) {
-        "chrome" -> "collapse"
-        "collapse" -> "back"
-        "back" -> "refresh"
-        "refresh" -> "none"
-        else -> "chrome"
-    }
-
-    private fun slotLabel(slot: String): String = when (slot) {
-        "chrome" -> "⌕ Address bar"
-        "collapse" -> "⊟ Collapse"
-        "back" -> "← Back"
-        "refresh" -> "⟳ Refresh"
-        else -> "None"
-    }
 
     // --- uBlock on/off (self-contained; drives the shared runtime) -----------
 

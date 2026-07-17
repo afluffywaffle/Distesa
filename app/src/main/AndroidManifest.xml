@@ -25,5 +25,11 @@
             android:exported="false"
             android:label="Settings"
             android:configChanges="orientation|screenSize|keyboardHidden" />
+
+        <activity
+            android:name=".LayoutActivity"
+            android:exported="false"
+            android:label="Layout"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
     </application>
 </manifest>
