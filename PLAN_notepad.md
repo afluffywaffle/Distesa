@@ -69,6 +69,27 @@ JSON storage, PDF export, and a "Notes" hub list sibling to History.
 
 Each phase compiles, is device-verifiable on the Nomad, and commits on its own.
 
+### Phase 0 — Surface-tab strip in the chrome (small, standalone)
+
+_Added 2026-07-18 after user discussion. The app's surfaces — Notes / Reader /
+History — get a tab row in the chrome; the settings hub becomes settings-only._
+
+- `buildChromeBar`'s column gains a **surface slot** above the bar: one container
+  holding BOTH the new `tabRow` and the existing `suggestBox`, **mutually
+  exclusive** — tabs show at rest, and `updateSuggestions`/`hideSuggestions` swap
+  to the suggestion panel while the user is typing with matches, back to tabs on
+  blur/clear (user's call: they never need to coexist, so the chrome never stacks
+  three rows). Column = `[surface slot][bar]`; rides show/hide + IME lift for free.
+- Tabs are **launchers, not live contexts** (single-session model preserved): flat
+  bordered pills, house style. Tap History → `HistoryActivity`; later Notes →
+  `NotesActivity`; later Reader → reader mode. No selection state in v1.
+- **No dead placeholders**: ships with `[History]` only; Notes joins in Phase 4,
+  Reader whenever reader mode lands.
+- **◷ leaves the `LayoutActivity` hub** in this phase — one way to reach each
+  surface; the hub keeps only settings/config pages.
+- **Verify**: summon chrome → tab row visible → History opens; type in the URL
+  field → suggestions replace tabs → blur → tabs return.
+
 ### Phase 1 — Pen foundation: `PadView` + drawPath port (no browser integration yet)
 
 New `notes/DrawPathClient.kt` (port from layuv, package-renamed, appName = our pkg) and
@@ -137,7 +158,8 @@ new `notes/PadView.kt`:
 
 ### Phase 4 — Hub: `NotesActivity`
 
-- Mirror `HistoryActivity` wholesale: ✎ button in `LayoutActivity.topBar` (next to ◷),
+- Mirror `HistoryActivity` wholesale: reached via a new **`[Notes]` tab in the
+  Phase-0 surface strip** (NOT a hub button — the hub is settings-only now);
   paginated rows (bold title / grey url / relative time / page count), per-row ✕ +
   Clear-all via `confirmImpact`, `exported=false`.
 - Row tap → relaunch `MainActivity` with `EXTRA_NAV_URL` = note's url **+ new
