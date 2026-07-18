@@ -5,37 +5,51 @@ Threads: `phase1` (Distesa Phase-1 UI/media/settings + naming) · `avosetta` (re
 ---
 
 ## Thread: phase1
-_Updated 2026-07-17 (session L)_
+_Updated 2026-07-17 (session M)_
 
 ### Next session — paste this to start
 
 > Resume Avosetta, thread **phase1** (repo `~/Develop/Distesa`, branch **`main`**, tip
-> `0acedcd` — **pushed, in sync with `origin/main`**). Session L was short: (1) **merged +
-> pushed** the old `settings-editor-refactor` work to `origin/main` (`6925470`) and deleted
-> the merged branch; (2) added the **Chloe mascot** two places, committed `0acedcd`, pushed.
-> Chloe now appears as a **faded watermark behind the configurator** wireframe
-> (`LayoutActivity`, `alpha 0.15`, behind the stroke-only `PreviewView`) and as a
-> **full-bleed blank-home overlay on the main screen** (`MainActivity`): the app now
-> **starts blank on the Chloe home instead of auto-loading `TEST_URL`**, and the overlay
-> hides on the first real page load (`onLocationChange` → `setHomeVisible(isBlankUrl(url))`)
-> and returns on `about:blank`/null. Asset lives at
-> `app/src/main/res/drawable-nodpi/chloe_typing.png` (copied from `~/Develop/Chloe`); the
-> user noted Chloe is **missing an eyelash** — a fixed asset can be dropped over that same
-> path, no code change. Read `HANDOFF.md` → `## Thread: phase1` (session L) and the
-> `handoff_phase1` memory; also read `~/Develop/supernote-dev-reference/README.md` AND
-> `Epd.kt`'s "prior approaches tried and abandoned" notes before any Supernote/refresh work.
-> Devices: Nomad `SN078C10005528` @ `100.67.164.61:5555` (also USB), Manta `SN100C10008955`
-> @ `100.98.2.91:5555`; adb at `~/Library/Android/sdk/platform-tools/adb`; package
-> **`com.afluffywaffle.avosetta.dev`**; build `./gradlew :app:assembleDebug` then `adb -s
-> SN078C10005528 install -r app/build/outputs/apk/debug/app-debug.apk` (settings activities
-> are `exported=false` — navigate via UI). **First tasks (the still-open UX calls, code
-> locations already scouted):** (a) rename the ambiguous **"Images: …"** quick-panel control
-> — it cycles the 4-way image *policy* hidden/tap/primary/all (`MainActivity` `shortPolicy`
-> ~L1405, `imgToggle` ~L1132); (b) confirm **animations-off** stays in Rendering as a plain
-> toggle (recommended — can't break sites, no impact prompt); (c) **2-column catalog picker**
-> in `LayoutActivity` `showPicker`/`openPane` (~L369/L222) once options overflow one pane
-> (11 now, still fits). Optional: gate the removed `TEST_URL` dev auto-load behind the `.dev`
-> variant if the blank-home start hurts the dev-test flow.
+> `198a171` — **pushed, in sync with `origin/main`**). Session M added **e-ink accessibility
+> + per-site "render as-is"**, all committed+pushed and verified on the **Manta**
+> (`SN100C10008955` @ `100.98.2.91:5555` — **Nomad was unreachable over Tailscale all
+> session**). Shipped: (1) two contrast levers in a **new `AccessibilityActivity`** (◐ button
+> in the `LayoutActivity` hub) — **Prefer light pages** (engine `preferredColorScheme=LIGHT`,
+> `applyColorScheme`) + **Force black text on white** (content-script CSS in `images.js`,
+> which **skips comic/manga readers** via `isMediaViewer()` so viewers like viz keep their
+> letterbox); (2) **per-site "Render as-is"** escape hatch that bypasses EVERY e-ink lever for
+> one host (`rawHosts` pref = source of truth; engine via `applyPerHostEngine` in
+> `onLoadRequest`; content via effective `pushSettingsToExtension(host)` + `images.js`
+> `_raw:HOST` mirror; **`background.js` `policyFor()` returns `load-all` for a raw host** so
+> the network block stops cancelling images — that was the final bug), reachable from BOTH the
+> ⚙ quick-panel button and the ◐ page; (3) **chrome idle timeout removed** → tap-off-chrome
+> dismiss (`root.onInterceptTouchEvent`). Read `HANDOFF.md` → `## Thread: phase1` (session M)
+> + the `handoff_phase1` memory; also read `~/Develop/supernote-dev-reference/README.md`
+> before any Supernote work. adb at `~/Library/Android/sdk/platform-tools/adb`; package
+> **`com.afluffywaffle.avosetta.dev`** (launch `com.afluffywaffle.avosetta.dev/com.afluffywaffle.avosetta.MainActivity`);
+> build `./gradlew :app:assembleDebug` then `adb -s SN100C10008955 install -r
+> app/build/outputs/apk/debug/app-debug.apk`. No VIEW intent filter + IME swallows synthetic
+> text → **human must drive page loads/URL entry**. **First tasks:** pick from the three
+> parked backlog items in "Open / next" — **quick-panel latency/no-feedback** (esp. "Images:";
+> reload-driven, no tap ack), the **site-exceptions manager** (paginated/sortable/searchable
+> list of all per-host exceptions), or the still-open older UX calls ("Images:" rename /
+> 2-col picker). Optional leftover: gate the removed `TEST_URL` dev auto-load behind `.dev`.
+
+### Session 2026-07-17 (M): e-ink accessibility levers + per-site "render as-is" + chrome tap-to-dismiss — COMMITTED + PUSHED (`198a171`, `origin/main`)
+Verified on the **Manta** (Nomad unreachable over Tailscale all session). User-driven, iterative.
+- **Why:** user asked whether we enforce e-ink accessibility (light backgrounds) — we enforced NOTHING before (dark-theme sites rendered muddy grey on the panel). Grew into a contrast feature, then a per-site "render as-is" escape hatch.
+- **Accessibility levers (both default ON), new `AccessibilityActivity.kt`** reached via a bordered **◐** button in the `LayoutActivity` top-bar hub (between Extensions and `?`; ◐ = contrast glyph, B&W-safe vs the colour ♿ emoji):
+  - **Prefer light pages** — engine `sharedRuntime.settings.preferredColorScheme = COLOR_SCHEME_LIGHT` (`applyColorScheme()`, `COLOR_SCHEME_SYSTEM` when off). Plain toggle (can't break sites).
+  - **Force black text on white** — content-script CSS injection in `images.js` (`applyForceLight`, mirrors `animOff`): `html,body{bg#fff;color#000}` + `*:not(img/picture/video/svg/canvas){…}`. `guardedToggle` with impact popup on ENABLING. **Skips comic/manga readers** via `isMediaViewer()` (any img/canvas/video with rect height ≥75% vh AND width ≥30% vw = a page image fit to height); re-checks on DOMContentLoaded/load/resize + setTimeout 0.6/1.8/3.5s (viz is an SPA, page img mounts after load). Found live on viz.com: force-white was repainting the reader's black letterbox → "big white side margins."
+  - Prefs `preferLight`/`forceLight`; pushed via `pushSettingsToExtension` + mirrored to `storage.local`. Perf log appends `light=… contrast=…`.
+- **Per-site "Render as-is" (bypass ALL e-ink levers for one host, global prefs untouched):**
+  - `rawHosts` StringSet pref (native = source of truth). `applyPerHostEngine(host)` (replaces `applyEtpForHost`, called in `onLoadRequest`) → TP off, JS on, colour scheme system. `pushSettingsToExtension(targetHost)` now sends EFFECTIVE raw-aware values + a `raw` flag (blockFonts/animOff/forceLight false, collapseMode "never").
+  - `images.js` mirrors per-host in `storage.local` key `_raw:HOST` (var `rawMode`), read at document_start in `start()` → policy=load-all, no gating/anim/forceLight. **`background.js` `policyFor()` returns `load-all` when `policyByHost["_raw:"+host]===true`** (policyByHost already mirrors all storage.local via `storage.onChanged`) — WITHOUT this the network block still cancelled every image even though placeholders were gone (the exact bug the user hit on Newsweek: `cancelled=10 allowed=0`).
+  - Toggle flow: button → native updates pref + posts `{type:"setRaw",host,raw}` → `images.js` persists `_raw` THEN `location.reload()` (persist-before-reload avoids a doc_start race); engine applies on the reload's `onLoadRequest`. TWO entry points: quick-panel `rawBtn` ("Render as-is: ON/OFF/—", `toggleRawForCurrentHost`, label synced in `onLocationChange` via `updateRawBtn`) + ◐ page "Per-site" section (`rawRow(host)`, confirm-on-enable). MainActivity writes a `currentHost` pref each `onLocationChange` so the ◐ page has host context; `onResume` detects a raw change for currentHost → `postRawToExtension` + reload. Perf log appends `raw=<bool>`.
+- **Chrome idle timeout REMOVED → tap-off-chrome dismiss.** `scheduleAutoHide()` is now a no-op shim (only `removeCallbacks`, no 7s post). `root` is an anon `FrameLayout` overriding `onInterceptTouchEvent`: while `chromeBar`/`settingsPanel` visible, first ACTION_DOWN off both → `hideChrome()` + consume (helper `pointInView`).
+- **Files:** `AccessibilityActivity.kt`(new), `MainActivity.kt`, `LayoutActivity.kt`, `AndroidManifest.xml`, `assets/extensions/eink/images.js`, `assets/extensions/eink/background.js`. (`RenderingActivity.kt` net-zero — levers added then moved out.)
+- **Three backlog items parked this session** (see "Open / next" below): quick-panel latency/no-feedback, site-exceptions manager, and the earlier "Images:" rename / 2-col picker calls (user chose accessibility instead).
+- **Gotchas:** debug applicationId = `com.afluffywaffle.avosetta.dev` (namespace ≠ appId → `am start` needs the `.dev` pkg + full component). No VIEW intent filter → can't `am start` a URL; IME swallows synthetic text → human drives page loads. `adb screencap` unreliable for GeckoView/EPD content — drive by logcat (`[eink-perf]`, `[eink-diag]`, `[eink-images]`).
 
 ### Session 2026-07-17 (L): push/merge settings refactor + Chloe mascot (configurator watermark + blank-home overlay) — COMMITTED + PUSHED (`0acedcd`, `origin/main`)
 
