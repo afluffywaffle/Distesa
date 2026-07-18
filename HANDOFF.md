@@ -5,35 +5,48 @@ Threads: `phase1` (Distesa Phase-1 UI/media/settings + naming) · `avosetta` (re
 ---
 
 ## Thread: phase1
-_Updated 2026-07-17 (session k)_
+_Updated 2026-07-17 (session L)_
 
 ### Next session — paste this to start
 
-> Resume Avosetta, thread **phase1** (repo `~/Develop/Distesa`, branch
-> **`settings-editor-refactor`**, tip `13c32c3` — **committed locally, NOT pushed, NOT
-> merged to `main`**). Session k made the visual **layout editor the main settings hub**
-> and split the old flat settings list into focused pages, each reachable from a top-bar
-> button (⌗ Rendering · drawn Supernote device icon · drawn puzzle Extensions icon · ?
-> help). **RenderingActivity** = web-content levers (block fonts / tracking / JS /
-> animations-off) each explained + an impact card-list; restrictive toggles confirm impact
-> before applying. **SupernoteActivity** = e-ink tuning (image auto-collapse + full-clear).
-> **SettingsActivity** = Extensions (uBlock) only. The `NavActions` catalog now carries the
-> three page launchers (Supernote/Extensions use vector icons via new `Spec.iconRes`) plus
-> zap/undozap/resetzap, all assignable to sliver+chrome slots. Quick panel trimmed (toolbar
-> pos → editor, animations → Rendering) with the zap actions divider-grouped. Verified on
-> the Nomad. Read `HANDOFF.md` → `## Thread: phase1` (session k) and the `handoff_phase1`
-> memory; also read `~/Develop/supernote-dev-reference/README.md` AND `Epd.kt`'s "prior
-> approaches tried and abandoned" notes before any Supernote/refresh work. Devices: Nomad
-> `SN078C10005528` @ `100.67.164.61:5555` (also USB), Manta `SN100C10008955` @
-> `100.98.2.91:5555`; adb at `~/Library/Android/sdk/platform-tools/adb`; package
+> Resume Avosetta, thread **phase1** (repo `~/Develop/Distesa`, branch **`main`**, tip
+> `0acedcd` — **pushed, in sync with `origin/main`**). Session L was short: (1) **merged +
+> pushed** the old `settings-editor-refactor` work to `origin/main` (`6925470`) and deleted
+> the merged branch; (2) added the **Chloe mascot** two places, committed `0acedcd`, pushed.
+> Chloe now appears as a **faded watermark behind the configurator** wireframe
+> (`LayoutActivity`, `alpha 0.15`, behind the stroke-only `PreviewView`) and as a
+> **full-bleed blank-home overlay on the main screen** (`MainActivity`): the app now
+> **starts blank on the Chloe home instead of auto-loading `TEST_URL`**, and the overlay
+> hides on the first real page load (`onLocationChange` → `setHomeVisible(isBlankUrl(url))`)
+> and returns on `about:blank`/null. Asset lives at
+> `app/src/main/res/drawable-nodpi/chloe_typing.png` (copied from `~/Develop/Chloe`); the
+> user noted Chloe is **missing an eyelash** — a fixed asset can be dropped over that same
+> path, no code change. Read `HANDOFF.md` → `## Thread: phase1` (session L) and the
+> `handoff_phase1` memory; also read `~/Develop/supernote-dev-reference/README.md` AND
+> `Epd.kt`'s "prior approaches tried and abandoned" notes before any Supernote/refresh work.
+> Devices: Nomad `SN078C10005528` @ `100.67.164.61:5555` (also USB), Manta `SN100C10008955`
+> @ `100.98.2.91:5555`; adb at `~/Library/Android/sdk/platform-tools/adb`; package
 > **`com.afluffywaffle.avosetta.dev`**; build `./gradlew :app:assembleDebug` then `adb -s
-> SN078C10005528 install -r app/build/outputs/apk/debug/app-debug.apk` (the settings
-> activities are `exported=false` so `am start` from shell is blocked — navigate via UI, or
-> drive with the sliver+gear+"More settings…" tap chain). First tasks: **push/merge the
-> `settings-editor-refactor` branch**; then the open UX calls — (a) rename/rethink the
-> ambiguous **"Images: …"** quick-panel control; (b) confirm **animations-off** belongs in
-> Rendering (vs Supernote) and whether it needs an impact prompt; (c) **2-column catalog
-> picker** once the option list overflows one pane (at 11 now, still fits).
+> SN078C10005528 install -r app/build/outputs/apk/debug/app-debug.apk` (settings activities
+> are `exported=false` — navigate via UI). **First tasks (the still-open UX calls, code
+> locations already scouted):** (a) rename the ambiguous **"Images: …"** quick-panel control
+> — it cycles the 4-way image *policy* hidden/tap/primary/all (`MainActivity` `shortPolicy`
+> ~L1405, `imgToggle` ~L1132); (b) confirm **animations-off** stays in Rendering as a plain
+> toggle (recommended — can't break sites, no impact prompt); (c) **2-column catalog picker**
+> in `LayoutActivity` `showPicker`/`openPane` (~L369/L222) once options overflow one pane
+> (11 now, still fits). Optional: gate the removed `TEST_URL` dev auto-load behind the `.dev`
+> variant if the blank-home start hurts the dev-test flow.
+
+### Session 2026-07-17 (L): push/merge settings refactor + Chloe mascot (configurator watermark + blank-home overlay) — COMMITTED + PUSHED (`0acedcd`, `origin/main`)
+
+Short session. Verified on the **Nomad** (`SN078C10005528`).
+
+- **Push/merge (first task done).** Fast-forwarded `main` to the `settings-editor-refactor` tip (session-k work + a committed `HANDOFF.md`, `6925470`) and **pushed `origin/main`** — this also carried the 3 previously-unpushed rebrand commits. Deleted the merged local branch.
+- **Chloe watermark in the configurator** (`LayoutActivity`). The `PreviewView` is stroke-only line-art, so an `ImageView` added to `root` before the `column` shows through the wireframe. `FIT_CENTER`, `alpha 0.15`, 24/80dp margins — kept faint so the gray wireframe stays legible on e-ink.
+- **Chloe blank-home overlay** (`MainActivity`). GeckoView is opaque, so Chloe is an **overlay ABOVE the web view** (added right after `root.addView(view)`, before `addStrips`, so slivers + gear stay tappable over her), `FIT_CENTER` on a white backing. New `homeMascot` field + `setHomeVisible()`/`isBlankUrl()` helpers. **Startup changed: `session.loadUri(TEST_URL)` replaced by `setHomeVisible(true)`** — app now opens on the blank Chloe home. `onLocationChange` toggles her: hidden on a real URL, shown on blank/`about:blank`. `TEST_URL` const kept but now unused.
+- **Asset:** `chloe_typing.png` copied from `~/Develop/Chloe/assets/stickers/` into `app/src/main/res/drawable-nodpi/`. User likes it as-is but flagged the **missing eyelash** — replace the file at the same path when Chloe repo ships a fix; no code change.
+- **Decision flagged, not resolved:** starting blank removes the Wikipedia dev auto-load. Left blank-by-default (the empty state is only reachable that way); offered to gate the auto-load behind `.dev` — user hasn't decided.
+- **Still open (unchanged from k):** the three UX calls above — none tackled this session; the user chose to stop after the mascot.
 
 ### Session 2026-07-17 (k): settings editor becomes the hub; Rendering/Supernote/Extensions pages — COMMITTED (`13c32c3` on branch `settings-editor-refactor`, not pushed)
 
