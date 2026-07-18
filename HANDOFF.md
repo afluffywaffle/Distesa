@@ -29,11 +29,15 @@ _Updated 2026-07-17 (session M)_
 > **`com.afluffywaffle.avosetta.dev`** (launch `com.afluffywaffle.avosetta.dev/com.afluffywaffle.avosetta.MainActivity`);
 > build `./gradlew :app:assembleDebug` then `adb -s SN100C10008955 install -r
 > app/build/outputs/apk/debug/app-debug.apk`. No VIEW intent filter + IME swallows synthetic
-> text → **human must drive page loads/URL entry**. **First tasks:** pick from the three
-> parked backlog items in "Open / next" — **quick-panel latency/no-feedback** (esp. "Images:";
-> reload-driven, no tap ack), the **site-exceptions manager** (paginated/sortable/searchable
-> list of all per-host exceptions), or the still-open older UX calls ("Images:" rename /
-> 2-col picker). Optional leftover: gate the removed `TEST_URL` dev auto-load behind `.dev`.
+> text → **human must drive page loads/URL entry**. **First tasks (user's call — do the UI/UX
+> easy wins first; see the "▶ CURRENT FOCUS" banner atop "Open / next"):** in order —
+> (1) **domain/title bar** (decide pinned-top vs. with-address-bar anchoring first),
+> (2) **globe sliver white outline** (`GlobeSearchDrawable.kt`, tiny), (3) **e-ink tap
+> feedback on nav strip** (`EdgeNavView` static outline on ACTION_DOWN), (4) **auto-focus
+> address on chrome reveal** (dedicated affordance only), (5) **page-flip distance calibration**
+> (~75% + overlap %), (6) **quick-panel latency/feedback**. Bigger pieces after: **site-exceptions
+> manager**, then the **security pillar**. Optional leftover: gate the removed `TEST_URL` dev
+> auto-load behind `.dev`.
 
 ### Session 2026-07-17 (M): e-ink accessibility levers + per-site "render as-is" + chrome tap-to-dismiss — COMMITTED + PUSHED (`198a171`, `origin/main`)
 Verified on the **Manta** (Nomad unreachable over Tailscale all session). User-driven, iterative.
@@ -411,6 +415,21 @@ unlock, EPD `EinkManager` reflection, pen vs. text-IME, the full IME playbook, e
 rules, DNS diagnosis. **Read it first for any future Supernote work.**
 
 **Open / next:**
+
+**▶ CURRENT FOCUS (2026-07-17, user's call) — knock out the UI/UX easy wins first,** in
+roughly this order (mostly self-contained view/drawable changes, no engine risk); full
+detail for each is in the bullets below:
+1. **Domain/title bar** — thin current-site strip (decide anchoring: pinned-top vs. with the address bar).
+2. **Globe sliver icon white outline** — give the globe the magnifier's white halo so it survives on dark bg. (Small, isolated to `GlobeSearchDrawable.kt`.)
+3. **E-ink tap feedback on nav strip** — static heavier outline on ACTION_DOWN in `EdgeNavView`.
+4. **Auto-focus address bar on chrome reveal** — but only on a dedicated address affordance, not every reveal.
+5. **Page-flip distance calibration** — ~75% advance + overlap %, needs on-device tuning.
+6. **Quick-panel latency / no feedback** — optimistic label update; measure first.
+Then the bigger pieces (**site-exceptions manager**), then the **security pillar**. The
+older "Images:" rename / 2-col picker calls are lower — superseded/deferred. (Housekeeping:
+"Hide edge nav bars while IME up" is DONE; animations-off placement is settled = plain
+toggle in Rendering.)
+
 - Verify on the **Nomad** (bottom-chrome by default — the IME poll + hidden-API should
   behave the same; confirm `getInputMethodWindowVisibleHeight` returns non-negative there).
 - **Security: work down `SECURITY.md`** — expanded this session into three checklists
