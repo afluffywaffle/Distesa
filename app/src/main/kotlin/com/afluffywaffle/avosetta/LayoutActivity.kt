@@ -139,6 +139,22 @@ class LayoutActivity : Activity() {
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             rightMargin = dp(8)
         })
+        // "◐" opens the Accessibility page (contrast & colour: prefer light pages +
+        // force black-on-white). The half-filled circle reads as a contrast symbol and,
+        // being a plain geometric glyph, stays B&W on e-ink (unlike the ♿ emoji, which
+        // renders in colour). Sits just left of the ? help button.
+        topBar.addView(Button(this).apply {
+            text = "◐"
+            setTextColor(MainActivity.CHROME_INK)
+            background = borderBg()
+            gravity = Gravity.CENTER
+            textSize = 20f
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+            contentDescription = "Accessibility"
+            setOnClickListener { startActivity(Intent(this@LayoutActivity, AccessibilityActivity::class.java)) }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            rightMargin = dp(8)
+        })
         topBar.addView(Button(this).apply {
             text = "?"
             setTextColor(MainActivity.CHROME_INK)

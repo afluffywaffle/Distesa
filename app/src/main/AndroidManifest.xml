@@ -45,5 +45,11 @@
             android:exported="false"
             android:label="Supernote"
             android:configChanges="orientation|screenSize|keyboardHidden" />
+
+        <activity
+            android:name=".AccessibilityActivity"
+            android:exported="false"
+            android:label="Accessibility"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
     </application>
 </manifest>

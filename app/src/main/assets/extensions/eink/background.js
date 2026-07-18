@@ -131,6 +131,11 @@ function hostOf(url) {
 }
 
 function policyFor(host) {
+    // Per-site "render as-is": images.js persists _raw:<host> into storage.local, which
+    // is mirrored into policyByHost (initial get(null) + storage.onChanged). A raw host
+    // loads every image — otherwise the network block here would still cancel them even
+    // though the content script stopped drawing placeholders.
+    if (policyByHost["_raw:" + host] === true) return "load-all";
     return policyByHost[host] || DEFAULT_POLICY;
 }
 

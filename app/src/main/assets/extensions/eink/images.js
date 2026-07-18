@@ -33,6 +33,8 @@
     "use strict";
 
     var HOST = location.hostname || "_local";
+    var RAW_KEY = "_raw:" + HOST;   // per-host "render as-is" mirror of native rawHosts
+    var rawMode = false;            // this host bypasses all content-side e-ink levers
     var DEFAULT_POLICY = "placeholder-tap";
     var CYCLE = ["hide-all", "placeholder-tap", "primary-content-only", "load-all"];
 
@@ -117,6 +119,77 @@
                 existing.remove();
             }
         } catch (e) { log("applyAnimOff failed: " + e); }
+    }
+
+    // --- Force black-on-white lever (settings) ------------------------------
+    // The aggressive contrast override: forces every element to black text on a
+    // white fill so a site's own dark/low-contrast colours can't survive. This is
+    // the e-ink counterpart of Firefox's "override the colours specified by the
+    // page" — on a grayscale panel colour carries no information anyway, so the
+    // win is legibility (light-grey body text, dark-mode backgrounds → solid
+    // black-on-white). Left alone: replaced media (img/svg/etc.) so pictures and
+    // logos aren't whitewashed, and CSS background-image (icon sprites) survives.
+    var FORCE_LIGHT_STYLE_ID = "eink-force-light";
+    var forceLightOn = false;
+    var forceLightWatching = false;
+
+    function injectForceLightStyle() {
+        if (document.getElementById(FORCE_LIGHT_STYLE_ID)) return;
+        var st = document.createElement("style");
+        st.id = FORCE_LIGHT_STYLE_ID;
+        st.textContent =
+            "html,body{background:#fff!important;color:#000!important}" +
+            "*:not(img):not(picture):not(video):not(svg):not(canvas)" +
+            "{background-color:#fff!important;color:#000!important;border-color:#999!important}" +
+            "a,a *{color:#000!important;text-decoration:underline!important}";
+        (document.head || document.documentElement).appendChild(st);
+    }
+    function removeForceLightStyle() {
+        var e = document.getElementById(FORCE_LIGHT_STYLE_ID);
+        if (e) e.remove();
+    }
+
+    // A page dominated by one big, tall image/canvas is a comic/manga/media reader
+    // (viz, etc.): forcing black-on-white is meaningless for artwork, and repainting
+    // the reader's own dark letterbox white turns it into giant blank side margins.
+    // Detect that and leave such pages alone. "Tall + wide-ish" targets a page image
+    // fit to screen height, without tripping on short full-width hero banners.
+    function isMediaViewer() {
+        try {
+            var vw = window.innerWidth, vh = window.innerHeight;
+            if (!vw || !vh) return false;
+            var els = document.querySelectorAll("img,canvas,video");
+            for (var i = 0; i < els.length; i++) {
+                var r = els[i].getBoundingClientRect();
+                if (r.height >= vh * 0.75 && r.width >= vw * 0.3) return true;
+            }
+            return false;
+        } catch (e) { return false; }
+    }
+
+    // Apply the override only when it's wanted AND the page isn't a media reader.
+    // Re-run as layout settles so a reader whose page image mounts after load (SPA)
+    // gets the style pulled back off.
+    function refreshForceLight() {
+        try {
+            if (forceLightOn && !isMediaViewer()) injectForceLightStyle();
+            else removeForceLightStyle();
+        } catch (e) { log("refreshForceLight failed: " + e); }
+    }
+    function applyForceLight(on) {
+        forceLightOn = on;
+        refreshForceLight();
+        if (on && !forceLightWatching) {
+            forceLightWatching = true;
+            window.addEventListener("DOMContentLoaded", refreshForceLight);
+            window.addEventListener("load", refreshForceLight);
+            window.addEventListener("resize", refreshForceLight);
+            // Manga readers swap in the page image a beat after load; re-check a few
+            // times so the whiten-then-detect settles without a persistent watcher.
+            setTimeout(refreshForceLight, 600);
+            setTimeout(refreshForceLight, 1800);
+            setTimeout(refreshForceLight, 3500);
+        }
     }
 
     function absUrl(u) {
@@ -537,10 +610,26 @@
                 else if (msg.type === "undoZap") undoZap();
                 else if (msg.type === "resetZaps") resetZaps();
                 else if (msg.type === "allowed" && msg.urls) onAllowed(msg.urls);
+                else if (msg.type === "setRaw" && typeof msg.raw === "boolean") {
+                    // Per-site "render as-is": persist the flag for THIS host, then reload
+                    // so the whole page comes up in the new mode from document_start (this
+                    // content script bypasses gating/anim/force-light; native bypasses the
+                    // engine levers on the reload's onLoadRequest). Persist BEFORE reload so
+                    // start() reads the fresh value.
+                    try {
+                        var o = {}; o[RAW_KEY] = msg.raw;
+                        browser.storage.local.set(o).then(function () { location.reload(); },
+                            function () { location.reload(); });
+                    } catch (e) { location.reload(); }
+                }
                 else if (msg.type === "settings") {
                     if (typeof msg.animOff === "boolean") {
                         applyAnimOff(msg.animOff);
                         try { browser.storage.local.set({ _animOff: msg.animOff }); } catch (e) {}
+                    }
+                    if (typeof msg.forceLight === "boolean") {
+                        applyForceLight(msg.forceLight);
+                        try { browser.storage.local.set({ _forceLight: msg.forceLight }); } catch (e) {}
                     }
                     if (typeof msg.collapseThreshold === "number") {
                         collapseThreshold = msg.collapseThreshold;
@@ -778,9 +867,14 @@
             // One read for policy + the mirrored view settings, so animations-off,
             // the collapse mode, and the per-host policy are all resolved BEFORE the
             // first placeholders are built (no flash, no wrong-mode first paint).
-            browser.storage.local.get([HOST, "_collapsed", "_animOff", "_collapseMode", "_collapseThreshold", HIDE_KEY]).then(function (res) {
+            browser.storage.local.get([HOST, RAW_KEY, "_collapsed", "_animOff", "_forceLight", "_collapseMode", "_collapseThreshold", HIDE_KEY]).then(function (res) {
                 res = res || {};
-                applyAnimOff(res._animOff !== false);            // default ON
+                rawMode = res[RAW_KEY] === true;
+                // "Render as-is": bypass every content-side e-ink lever from the start —
+                // no animation-kill, no force-light, no image gating/collapse. (Native
+                // handles the engine levers.) The page loads natively.
+                applyAnimOff(!rawMode && res._animOff !== false);   // default ON
+                applyForceLight(!rawMode && res._forceLight !== false); // default ON
                 if (Array.isArray(res[HIDE_KEY])) hideSelectors = res[HIDE_KEY];
                 if (typeof res._collapseMode === "string") collapseMode = res._collapseMode; // default "auto"
                 if (typeof res._collapseThreshold === "number") collapseThreshold = res._collapseThreshold; // default 6
@@ -789,8 +883,9 @@
                 else if (collapseMode === "never") collapsed = false;
                 else collapsed = false; // auto: start expanded; gatedCount flips it past threshold
                 if (res[HOST]) policy = res[HOST];
+                if (rawMode) { policy = "load-all"; collapsed = false; } // as-is = load everything, no gating
                 if (policy === "load-all") mediaAllowAll = true; // stop gating playback
-                log("media policy for " + HOST + " = " + policy + " collapsed=" + collapsed);
+                log("media policy for " + HOST + " = " + policy + " collapsed=" + collapsed + " raw=" + rawMode);
                 connectNative();
                 applyPolicy();
                 applyHides();
@@ -801,6 +896,7 @@
             }, function (e) {
                 log("storage.get failed, using defaults: " + e);
                 applyAnimOff(true);
+                applyForceLight(true);
                 connectNative();
                 applyPolicy();
                 startLoginWatch();
@@ -808,6 +904,7 @@
         } catch (e) {
             log("start failed: " + e);
             applyAnimOff(true);
+            applyForceLight(true);
             applyPolicy();
         }
     }

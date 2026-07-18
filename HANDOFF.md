@@ -431,6 +431,37 @@ rules, DNS diagnosis. **Read it first for any future Supernote work.**
 - **Domain/title bar (NEW backlog):** a thin bar showing the current site's name/URL
   (domain) so the user knows where they are. Open Q: persistently pinned on top, or
   attached to / revealed with the address bar? Decide the anchoring before building.
+- **Quick-panel (⚙) feels slow / no feedback (NEW backlog, 2026-07-17 — analyze):** the
+  quick-menu controls feel unresponsive — you tap and it looks like nothing happened,
+  **especially the "Images:" cycle**. Root suspicion: these controls are round-trip +
+  reload-driven, so there's a long gap before anything visibly changes. "Images:" →
+  `onCycleImagePolicy()` posts `cyclePolicy` to the extension → images.js changes policy,
+  persists, and `location.reload()`s; on e-ink the reload + EPD settle is seconds, and the
+  button LABEL only updates when the content script reports the new policy back (see the
+  `imgToggle.text = "Images: …"` message path in `MainActivity`), so there's no immediate
+  acknowledgement of the tap. Same shape likely affects "Render as-is" (also reload-based).
+  Wants: analyze the latency and add **immediate feedback** — e.g. optimistically update
+  the button label on tap, and/or a brief "applying…" state, and/or a single static press
+  affordance (note: transient e-ink press-flash was tried + rejected in session f — a full
+  invalidate/refresh is needed, so lean on label/state change over a flash). Measure where
+  the time actually goes (post → persist → reload → first paint → EPD) before optimizing.
+- **Site-exceptions manager (NEW backlog, 2026-07-17 — biggish):** a page that surfaces
+  every domain we hold a special exception for, so they can be reviewed/reconfigured in one
+  place. Sources to aggregate (all per-host, already persisted): **`rawHosts`** ("render
+  as-is", SharedPreferences set), **`loginHosts`** (ETP-relaxed / password-field seen,
+  SharedPreferences set), **per-site image policy** (owned by images.js in
+  `storage.local[HOST]` — hide-all/placeholder-tap/primary-content-only/load-all; NOT in
+  SharedPreferences, so reading it needs a native↔extension query or a mirror), and
+  **zapped elements** (per-host hide selectors in `storage.local`, key `HIDE_KEY`). Wants:
+  (1) list of domains + which exception(s) each has; (2) **add current domain** to a list
+  (e.g. "add this site to render-as-is") — the quick-panel/◐-page toggles already do raw,
+  but this is the bulk/manage view; (3) **pagination** (the list can get long); (4) **sort
+  alpha**; (5) **search/filter** by domain. Per-row: toggle/clear each exception, or remove
+  the domain entirely. Design notes: image-policy + zaps live in extension storage, so the
+  manager either (a) mirrors them into SharedPreferences on change, or (b) gets a native
+  "dump all exception state" round-trip from the extension — decide before building. New
+  Activity in the settings hub (its own top-bar button, or a row on the ◐ Accessibility
+  page). E-ink house style (paginate, don't infinite-scroll; ☑/☐ rows; no dialogs).
 - **Auto-focus address bar on chrome reveal (NEW backlog):** since chrome is hidden by
   default, tapping the chrome-reveal (sliver ☰) should focus the address field so the
   user can type immediately without a second tap. Especially important for top-anchored

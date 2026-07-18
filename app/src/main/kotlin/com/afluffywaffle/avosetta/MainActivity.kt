@@ -14,6 +14,8 @@ import android.text.InputType
 import android.util.Log
 import android.view.Gravity
 import android.view.WindowInsets
+import android.graphics.Rect
+import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
@@ -133,6 +135,13 @@ class MainActivity : Activity() {
     private var blockFonts = true       // block web-font requests (system fallback)
     private var strictTp = true         // engine strict tracking protection
     private var jsEnabled = true        // per-session JavaScript
+    // E-ink contrast levers. preferLight tells pages we want their LIGHT variant
+    // (engine-level preferredColorScheme); forceLight is the aggressive override
+    // that forces black-on-white via injected CSS (content script). Both default
+    // ON — a grayscale panel renders dark themes as muddy grey, so light + high
+    // contrast is the right baseline for the device.
+    private var preferLight = true      // engine COLOR_SCHEME_LIGHT
+    private var forceLight = true       // inject black-on-white CSS override
 
     // Page-level media placeholder display: collapsed = tiny inline chips (default),
     // else full sized boxes. Owned by images.js; mirrored here to label the toggle.
@@ -160,6 +169,15 @@ class MainActivity : Activity() {
     // Hosts observed to have a password field — tracking protection is relaxed to
     // Standard for these (Strict can break sign-in). Persisted; grows over time.
     private var loginHosts: MutableSet<String> = mutableSetOf()
+
+    // Per-site "render as-is" escape hatch. A host in this set bypasses EVERY e-ink
+    // lever — tracking protection, JS-off, colour scheme, font block, animations-off,
+    // force-light, image gating/collapse — and loads natively, while the user's global
+    // prefs stay untouched (flip it back to restore them). Native is the source of
+    // truth (engine levers read it per-navigation); the content script keeps a mirror
+    // in storage.local so it also bypasses at document_start (see images.js _raw:HOST).
+    private var rawHosts: MutableSet<String> = mutableSetOf()
+    private var rawBtn: Button? = null
 
     /** The installed uBlock Origin add-on, once resolved (install or list). */
     private var ublock: WebExtension? = null
@@ -200,6 +218,8 @@ class MainActivity : Activity() {
         runtime.webExtensionController.promptDelegate = AutoApprovePromptDelegate
         // Engine-level tracking protection, applied before the first load.
         applyTrackingProtection(strictTp)
+        // Engine-level preferred colour scheme (light for e-ink), before first load.
+        applyColorScheme(preferLight)
         // EPD full-clear cadence lever.
         Epd.FULL_EVERY = fullEvery
 
@@ -221,10 +241,30 @@ class MainActivity : Activity() {
 
         val edge = if (chromeAtBottom) Gravity.BOTTOM else Gravity.TOP
 
-        // Default state = NOTHING but the page. Chrome is summoned/dismissed only via
-        // the edge sliver (or the idle timer); a page tap NEVER moves it, so a lifted
+        // Default state = NOTHING but the page. Chrome is summoned via the edge sliver;
+        // once open it stays open until dismissed — either by the sliver toggle (☰) or by
+        // a tap anywhere OFF the chrome (see onInterceptTouchEvent below). There is no idle
+        // timeout. While chrome is hidden a page tap is never intercepted, so a lifted
         // consent banner can't shift out from under the user's finger mid-tap.
-        val root = FrameLayout(this)
+        val root = object : FrameLayout(this) {
+            override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+                // Tap-outside-to-dismiss. While the chrome bar (or its quick panel) is up,
+                // the first tap that lands off both of them closes the chrome and is
+                // consumed here, so it only dismisses — it doesn't also click a page link
+                // or fire a paging strip underneath. Taps ON the chrome/panel fall through
+                // to their own handlers untouched.
+                if (ev.actionMasked == MotionEvent.ACTION_DOWN &&
+                    ::chromeBar.isInitialized && chromeBar.visibility == View.VISIBLE &&
+                    !pointInView(chromeBar, ev) &&
+                    !(::settingsPanel.isInitialized &&
+                        settingsPanel.visibility == View.VISIBLE && pointInView(settingsPanel, ev))
+                ) {
+                    hideChrome()
+                    return true
+                }
+                return super.onInterceptTouchEvent(ev)
+            }
+        }
         // Light background so the INSET paging margins (revealed when the GeckoView
         // is narrowed) read as white page-margin, never a dark band. Honors the
         // "no dark chrome" rule.
@@ -262,8 +302,8 @@ class MainActivity : Activity() {
 
         // The chrome-reveal affordance now lives in the edge slivers (bottom of each
         // nav strip, added by addStrips) — freeing the bottom CENTRE, where consent
-        // banners put their buttons, so those stay tappable. There is deliberately no
-        // tap-page-to-dismiss: chrome hides via its sliver toggle or the idle timer.
+        // banners put their buttons, so those stay tappable. Chrome hides via its sliver
+        // toggle or a tap off the chrome (root.onInterceptTouchEvent); no idle timeout.
 
         // Chrome bar (hidden by default) at the adaptive edge. Inset horizontally by
         // the strip width on each side that has a strip, so the bar sits BETWEEN the
@@ -738,8 +778,8 @@ class MainActivity : Activity() {
     }
 
     private fun toggleChrome() {
-        // An explicit sliver tap is the only reveal path (the idle timer only hides), so
-        // honour the auto-focus setting here — a tap to open the toolbar is almost always
+        // An explicit sliver tap is the only reveal path (a tap off the chrome only hides),
+        // so honour the auto-focus setting here — a tap to open the toolbar is almost always
         // a tap to type an address.
         if (chromeBar.visibility == View.VISIBLE) hideChrome() else showChrome(autoFocusOnReveal)
     }
@@ -903,13 +943,20 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Generous idle auto-hide (~7s). Never runs while the address field is focused
-     * (typing pins the chrome open). Reset on any chrome touch.
+     * Idle auto-hide is DISABLED: chrome stays up until it's explicitly dismissed
+     * (the ☰ sliver toggle, or a tap off the chrome — see root.onInterceptTouchEvent).
+     * Kept as a no-op that only clears any stale callback, so the many existing call
+     * sites don't need to change and a legacy queued [autoHide] can never fire.
      */
     private fun scheduleAutoHide() {
         ui.removeCallbacks(autoHide)
-        if (::urlField.isInitialized && urlField.hasFocus()) return // pinned while typing
-        ui.postDelayed(autoHide, 7000)
+    }
+
+    /** True if [ev] (screen coords) falls within [v]'s on-screen bounds. */
+    private fun pointInView(v: View, ev: MotionEvent): Boolean {
+        val r = Rect()
+        v.getGlobalVisibleRect(r)
+        return r.contains(ev.rawX.toInt(), ev.rawY.toInt())
     }
 
     /** Called after Go/back/reload — hide the chrome once navigation is under way. */
@@ -944,8 +991,11 @@ class MainActivity : Activity() {
         blockFonts = prefs.getBoolean("blockFonts", true)
         strictTp = prefs.getBoolean("strictTp", true)
         jsEnabled = prefs.getBoolean("jsEnabled", true)
+        preferLight = prefs.getBoolean("preferLight", true)
+        forceLight = prefs.getBoolean("forceLight", true)
         fullEvery = prefs.getInt("fullEvery", 6)
         loginHosts = HashSet(prefs.getStringSet("loginHosts", emptySet()) ?: emptySet())
+        rawHosts = HashSet(prefs.getStringSet("rawHosts", emptySet()) ?: emptySet())
         navStyle = prefs.getString("navStyle", "inset") ?: "inset"
         navPlacement = prefs.getString("navPlacement", "both") ?: "both"
         showZones = prefs.getBoolean("showZones", true)
@@ -1001,14 +1051,28 @@ class MainActivity : Activity() {
         return AUTH_ALLOWLIST.any { h == it || h.endsWith(".$it") }
     }
 
+    /** Lowercased host of a URL, or "" if none/unparseable. */
+    private fun hostOf(url: String?): String =
+        try { java.net.URI(url).host?.lowercase() ?: "" } catch (e: Throwable) { "" }
+
+    /** True if [host] is in the per-site "render as-is" set. */
+    private fun isRawHost(host: String?): Boolean {
+        val h = host?.lowercase() ?: return false
+        return h.isNotEmpty() && rawHosts.contains(h)
+    }
+
     /**
-     * Apply the correct ETP level for the host about to load: Standard for login/
-     * auth hosts so sign-in isn't broken, otherwise the user's global setting
-     * (Strict by default). Called per-navigation from the NavigationDelegate.
+     * Apply the engine-level levers for the host about to load. When the host is in the
+     * "render as-is" set, EVERYTHING is relaxed to native rendering: tracking protection
+     * off, JavaScript on, no forced colour scheme — the user's global prefs are ignored
+     * for this host only. Otherwise the usual policy: Standard ETP for login/auth hosts
+     * (Strict can break sign-in), else the user's settings. Called per-navigation.
      */
-    private fun applyEtpForHost(host: String?) {
-        if (isLoginHost(host)) applyTrackingProtection(strict = false) // Standard
-        else applyTrackingProtection(strict = strictTp)
+    private fun applyPerHostEngine(host: String?) {
+        val raw = isRawHost(host)
+        applyTrackingProtection(strict = !raw && strictTp && !isLoginHost(host))
+        if (::session.isInitialized) session.settings.setAllowJavascript(if (raw) true else jsEnabled)
+        applyColorScheme(preferLight = if (raw) false else preferLight)
     }
 
     /** Sets ETP just before each top-level navigation (earliest per-nav hook). */
@@ -1018,8 +1082,12 @@ class MainActivity : Activity() {
             request: GeckoSession.NavigationDelegate.LoadRequest,
         ): GeckoResult<org.mozilla.geckoview.AllowOrDeny>? {
             if (request.target == GeckoSession.NavigationDelegate.TARGET_WINDOW_CURRENT) {
-                val host = try { java.net.URI(request.uri).host } catch (e: Throwable) { null }
-                applyEtpForHost(host)
+                val host = hostOf(request.uri)
+                applyPerHostEngine(host)
+                // Push effective content-script levers for the target host BEFORE its
+                // subresources fetch, so a raw host's fonts/animations/force-light are
+                // already relaxed at the network + document_start layer (not one reload late).
+                pushSettingsToExtension(host)
             }
             return null // allow the load
         }
@@ -1033,6 +1101,11 @@ class MainActivity : Activity() {
             currentUrl = url
             // Reveal the Chloe home only in the blank state; hide it once a real page loads.
             setHomeVisible(isBlankUrl(url))
+            // Refresh the quick-panel "Render as-is" label for the new host.
+            runOnUiThread { updateRawBtn() }
+            // Publish the current host so the Accessibility page can offer a per-site
+            // "render as-is" toggle for it (that page has no browsing context of its own).
+            if (::prefs.isInitialized) prefs.edit().putString("currentHost", hostOf(url)).apply()
             // Keep the (usually hidden) address field in sync when it's not focused.
             if (::urlField.isInitialized && !urlField.hasFocus()) {
                 url?.let { urlField.setText(it) }
@@ -1167,6 +1240,13 @@ class MainActivity : Activity() {
         imgToggle = makeButton("Images: …") { onCycleImagePolicy() }.apply { isEnabled = false }
         panel.addView(imgToggle)
 
+        // Per-site escape hatch: bypass ALL e-ink processing for this host and render the
+        // page natively (fonts, JS, tracking protection, colour, image gating all off),
+        // for a site the e-ink treatment breaks. Per-domain, remembered; global prefs
+        // untouched. Label reflects the current host's state; disabled on the blank home.
+        rawBtn = makeButton("Render as-is: —") { toggleRawForCurrentHost() }.apply { isEnabled = false }
+        panel.addView(rawBtn)
+
         // Element zapper group — arm/undo/reset, fenced off with dividers so the
         // destructive-ish "hide" actions read as one cluster.
         panel.addView(panelDivider())
@@ -1199,6 +1279,23 @@ class MainActivity : Activity() {
     private fun makeButton(label: String, onClick: () -> Unit): Button =
         Button(this).apply { text = label; setTextColor(CHROME_INK); setBackgroundColor(Color.TRANSPARENT); setOnClickListener { onClick() } }
 
+    /**
+     * Engine-level preferred colour scheme. [preferLight] ON → pages that honour
+     * `prefers-color-scheme` serve their LIGHT variant instead of a dark theme that
+     * renders as muddy grey on the panel. This is the gentle, can't-break-sites
+     * lever; the aggressive black-on-white guarantee is [forceLight] (content script).
+     * It's a runtime-wide (not per-session) setting, so a reload picks it up.
+     */
+    private fun applyColorScheme(preferLight: Boolean) {
+        try {
+            sharedRuntime(this).settings.preferredColorScheme =
+                if (preferLight) GeckoRuntimeSettings.COLOR_SCHEME_LIGHT
+                else GeckoRuntimeSettings.COLOR_SCHEME_SYSTEM
+        } catch (e: Throwable) {
+            Log.w(TAG, "applyColorScheme threw ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
     private fun applyTrackingProtection(strict: Boolean) {
         try {
             val cb = sharedRuntime(this).settings.contentBlocking
@@ -1228,16 +1325,25 @@ class MainActivity : Activity() {
         if (::session.isInitialized) session.reload()
     }
 
-    /** Push content-script-side levers (animations, font-block gate) to the extension. */
-    private fun pushSettingsToExtension() {
+    /**
+     * Push content-script-side levers (animations, font-block gate, force-light) to the
+     * extension. Values are EFFECTIVE for [targetHost] (defaults to the current page):
+     * a "render as-is" host gets every lever relaxed (fonts on, no anim-kill, no
+     * force-light, no image collapse) plus a `raw` flag so the content script drops
+     * image gating too — without disturbing the user's saved prefs.
+     */
+    private fun pushSettingsToExtension(targetHost: String = hostOf(currentUrl)) {
         val p = einkPort ?: return
+        val raw = isRawHost(targetHost)
         try {
             p.postMessage(
                 org.json.JSONObject()
                     .put("type", "settings")
-                    .put("animOff", animOff)
-                    .put("blockFonts", blockFonts)
-                    .put("collapseMode", collapseMode)
+                    .put("raw", raw)
+                    .put("animOff", !raw && animOff)
+                    .put("forceLight", !raw && forceLight)
+                    .put("blockFonts", !raw && blockFonts)
+                    .put("collapseMode", if (raw) "never" else collapseMode)
                     .put("collapseThreshold", collapseThreshold),
             )
         } catch (e: Throwable) {
@@ -1262,7 +1368,10 @@ class MainActivity : Activity() {
                     " js=${if (jsEnabled) "on" else "off"}" +
                     " fonts=${if (blockFonts) "blocked" else "on"}" +
                     " tp=${if (strictTp) "strict" else "off"}" +
-                    " anim=${if (animOff) "off" else "on"}",
+                    " anim=${if (animOff) "off" else "on"}" +
+                    " light=${if (preferLight) "pref" else "sys"}" +
+                    " contrast=${if (forceLight) "forced" else "off"}" +
+                    " raw=${isRawHost(pageHost)}",
             )
         }
     }
@@ -1436,6 +1545,54 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * Toggle "render as-is" for the current page's host (quick-panel button). Native's
+     * rawHosts set is the source of truth for the engine levers; we also tell the content
+     * script to persist its own per-host mirror and reload — that reload re-fires
+     * onLoadRequest, which applies the (now updated) engine levers. No-op on the blank home.
+     */
+    private fun toggleRawForCurrentHost() {
+        val host = hostOf(currentUrl)
+        if (host.isEmpty()) return
+        if (!rawHosts.remove(host)) rawHosts.add(host)
+        prefs.edit().putStringSet("rawHosts", rawHosts).apply()
+        updateRawBtn()
+        postRawToExtension(host) // content script persists + reloads; engine re-applies on reload
+    }
+
+    /**
+     * Tell the content script the current raw state for [host] so it mirrors it into
+     * storage.local (_raw:host) and reloads — the reload is what makes the change take,
+     * and doing the persist BEFORE the reload (content-side) avoids a document_start race.
+     */
+    private fun postRawToExtension(host: String) {
+        val port = einkPort
+        if (port == null) { Log.w(TAG, "setRaw: no eink port yet"); return }
+        try {
+            port.postMessage(
+                org.json.JSONObject()
+                    .put("type", "setRaw")
+                    .put("host", host)
+                    .put("raw", isRawHost(host)),
+            )
+        } catch (e: Throwable) {
+            Log.w(TAG, "setRaw post threw ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    /** Sync the quick-panel raw button's label/enabled state to the current host. */
+    private fun updateRawBtn() {
+        val b = rawBtn ?: return
+        val host = hostOf(currentUrl)
+        if (host.isEmpty()) {
+            b.isEnabled = false
+            b.text = "Render as-is: —"
+        } else {
+            b.isEnabled = true
+            b.text = "Render as-is: ${if (isRawHost(host)) "ON" else "OFF"}"
+        }
+    }
+
     private fun shortPolicy(policy: String): String = when (policy) {
         "hide-all" -> "hidden"
         "placeholder-tap" -> "tap"
@@ -1505,25 +1662,35 @@ class MainActivity : Activity() {
         )
         val oldContent = listOf(
             strictTp.toString(), jsEnabled.toString(), blockFonts.toString(), animOff.toString(),
+            preferLight.toString(), forceLight.toString(),
             collapseMode, collapseThreshold.toString(), fullEvery.toString(),
         )
+        // Raw ("render as-is") for the current host may have been toggled from the
+        // Accessibility page while we were paused — detect and apply that on return.
+        val curHost = hostOf(currentUrl)
+        val oldRaw = isRawHost(curHost)
         loadSettings()
+        val rawChanged = isRawHost(curHost) != oldRaw
         val newStructural = listOf(
             navStyle, navPlacement, chromePos, showZones.toString(),
             edgeSlotLeftTop, edgeSlotLeftBottom, edgeSlotRightTop, edgeSlotRightBottom,
         )
         val newContent = listOf(
             strictTp.toString(), jsEnabled.toString(), blockFonts.toString(), animOff.toString(),
+            preferLight.toString(), forceLight.toString(),
             collapseMode, collapseThreshold.toString(), fullEvery.toString(),
         )
-        // Engine-level levers apply immediately.
-        applyTrackingProtection(strictTp)
+        // Engine-level levers apply immediately, per current host (raw-aware).
+        applyPerHostEngine(curHost)
         Epd.FULL_EVERY = fullEvery
-        if (::session.isInitialized) session.settings.setAllowJavascript(jsEnabled)
         // Content-script levers (animations, fonts, collapse) pushed to the extension.
         pushSettingsToExtension()
+        updateRawBtn()
         // A structural change (edge/nav) needs a full rebuild.
         if (oldStructural != newStructural) { recreate(); return }
+        // A raw toggle from the Accessibility page: let the content script persist its
+        // per-host mirror and reload (that reload re-applies the engine levers above).
+        if (rawChanged) { postRawToExtension(curHost); return }
         // A content-affecting change (or a uBlock toggle from settings) needs a reload.
         val ublockDirty = prefs.getBoolean("ublockDirty", false)
         if (ublockDirty) prefs.edit().putBoolean("ublockDirty", false).apply()
