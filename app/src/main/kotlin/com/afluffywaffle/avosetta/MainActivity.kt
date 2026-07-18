@@ -403,10 +403,10 @@ class MainActivity : Activity() {
             v.onApplyWindowInsets(insets)
         }
 
-        // Open a URL handed in by the History page (which relaunches us with a navUrl
-        // extra), otherwise start on the blank Chloe home — the mascot overlay is visible
-        // by default and stays until the user navigates somewhere.
-        val navUrl = intent?.getStringExtra(EXTRA_NAV_URL)
+        // Open a URL handed in by the History page (navUrl extra), an external ACTION_VIEW
+        // link, or a shared ACTION_SEND text — otherwise start on the blank Chloe home
+        // (mascot overlay visible until the user navigates somewhere).
+        val navUrl = intent?.let { urlFromIntent(it) }
         if (!navUrl.isNullOrBlank()) {
             intent.removeExtra(EXTRA_NAV_URL)
             session.loadUri(navUrl)
@@ -1466,6 +1466,18 @@ class MainActivity : Activity() {
             uri: String?,
             error: org.mozilla.geckoview.WebRequestError,
         ): GeckoResult<String>? = GeckoResult.fromValue(buildErrorPage(uri, error))
+
+        // We're deliberately single-session (no tabs): a `_blank`/window.open link would
+        // otherwise ask Gecko to open a NEW session that nothing displays, and silently
+        // die. Redirect it into the existing session instead of creating one, and tell
+        // Gecko no new session was created (null result).
+        override fun onNewSession(
+            s: GeckoSession,
+            uri: String,
+        ): GeckoResult<GeckoSession>? {
+            session.loadUri(uri)
+            return GeckoResult.fromValue(null)
+        }
     }
 
     /**
@@ -2013,12 +2025,37 @@ class MainActivity : Activity() {
         ublock = ext
     }
 
+    /**
+     * Resolve the URL to open for an incoming [intent], covering three entry points
+     * through one path: the History page's navUrl extra (existing), an external
+     * ACTION_VIEW (app registered as a browser target for http/https), and a shared
+     * ACTION_SEND text/plain (extract the first http(s) URL, or use the whole text
+     * if it IS a URL). Returns null if none apply.
+     */
+    private fun urlFromIntent(intent: Intent): String? {
+        intent.getStringExtra(EXTRA_NAV_URL)?.let { if (it.isNotBlank()) return it }
+        if (intent.action == Intent.ACTION_VIEW) {
+            intent.data?.toString()?.let { if (it.isNotBlank()) return it }
+        }
+        if (intent.action == Intent.ACTION_SEND && intent.type == "text/plain") {
+            val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()
+            if (!text.isNullOrBlank()) {
+                if (text.startsWith("http://") || text.startsWith("https://")) return text
+                val match = Regex("""https?://\S+""").find(text)
+                if (match != null) return match.value
+            }
+        }
+        return null
+    }
+
     // Re-entry from the History page: it relaunches us (CLEAR_TOP|SINGLE_TOP) with the
     // chosen URL rather than recreating, so the load lands on the existing session.
+    // Also handles an external ACTION_VIEW/ACTION_SEND re-delivered to the existing
+    // singleTask instance (see urlFromIntent).
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        val navUrl = intent.getStringExtra(EXTRA_NAV_URL)
+        val navUrl = urlFromIntent(intent)
         if (!navUrl.isNullOrBlank() && ::session.isInitialized) {
             intent.removeExtra(EXTRA_NAV_URL)
             session.loadUri(navUrl)
