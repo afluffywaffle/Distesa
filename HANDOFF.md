@@ -5,9 +5,53 @@ Threads: `phase1` (Distesa Phase-1 UI/media/settings + naming) · `avosetta` (re
 ---
 
 ## Thread: phase1
-_Updated 2026-07-18 (session O)_
+_Updated 2026-07-18 (session Q)_
+
+### Session 2026-07-18 (Q): Clear-all now wipes Gecko browsing data — COMMITTED, device-VERIFIED
+Implemented `PLAN_clear_browsing_data.md`. `HistoryActivity.kt` only: Clear-all's `confirmImpact` body now states the real impact (signed out of websites; caches/site data wiped); onAccept keeps `HistoryStore.clear` + `renderList()` then fires `MainActivity.sharedRuntime(this).storageController.clearData(StorageController.ClearFlags.ALL)` via two-arg `GeckoResult.accept` (Log.i success / Log.w failure, no crash). Per-row ✕ / HistoryStore untouched. Build clean; Opus code-gate PASS. **Verified on the Nomad** (httpbin cookie set → Clear all → logcat `history: gecko data cleared` + cookie gone on reload). **Autocomplete panel visually confirmed working by the user** — session-P pending item CLOSED. Still NOT pushed (`9013ad6` + this commit).
 
 ### Next session — paste this to start
+
+> Resume Avosetta, thread **phase1** (repo `~/Develop/Distesa`, branch **`main`**). Session P
+> (2026-07-18) shipped **browser HISTORY** — COMMITTED `9013ad6` on main, **NOT pushed**,
+> data layer verified on the **Nomad** `SN078C10005528` @ `100.67.164.61:5555` (wifi). New
+> **`HistoryStore.kt`** (newest-first visit log as ONE JSON blob in the `distesa_settings`
+> prefs — no Room; dedup by URL, **7-day rolling retention** pruned on every read/write,
+> 1000-entry backstop; collapses server-redirect hops so a redirect doesn't stack a dup);
+> recording in `onLocationChange` (url, skips blank home) + `onTitleChange` (title backfill);
+> new **`HistoryActivity.kt`** in the LayoutActivity hub (new **◷** button) — paginated
+> newest-first, per-row ✕ + Clear-all, tap-a-row relaunches MainActivity with a `navUrl`
+> extra (`CLEAR_TOP|SINGLE_TOP` → new **`onNewIntent`**) so it loads on the existing session;
+> and **address-bar autocomplete** = a CUSTOM full-width `suggestBox` panel INSIDE the chrome
+> wrapper (buildChromeBar now returns a vertical `col` of `[suggestBox][bar]` on bottom chrome
+> so suggestions sit ABOVE the bar and ride the IME lift — the framework `AutoCompleteTextView`
+> dropdown is unusable under `adjustNothing`: it drops straight behind the keyboard), driven
+> by a `TextWatcher` → `updateSuggestions`. On-device verified via `run-as` prefs read-back:
+> dedup + newest-first ordering + redirect-collapse + 7-day prune all confirmed. **STILL
+> PENDING: a human visual eyeball of the autocomplete panel** (couldn't drive the IME — focus
+> the address bar + type a letter, then screencap). **NEXT: discuss with the user — they have
+> thoughts + another feature idea. Two things already on the table:** (1) **Raindrop /
+> extensions-as-favorites** — user wants NO native favorites, use extensions instead; BUT the
+> app installs AMO add-ons (`ensureUBlock`/`install(UBLOCK_XPI)`) yet surfaces **NO
+> browserAction/pageAction popup at all** (confirmed: zero `setActionDelegate` /
+> `WebExtension.Action` usage anywhere). So Raindrop would load but you can't log in / hit
+> Save. To make it real, FIRST build a browser-action popup surface (a chrome button that
+> lists installed extensions' actions via `WebExtension.setActionDelegate` + `WebExtension.Action`
+> and renders the popup), THEN install Raindrop (AMO slug `raindropio`). (2) **TABS** (in the
+> pipeline, approach undecided) — proposed: one `GeckoSession` per tab + a `TabManager` (list +
+> current index), swap the visible one via `view.setSession`; a tab-OVERVIEW screen (hub-style
+> list, NOT a persistent e-ink tab strip); handle `onNewSession` for `_blank`/`window.open`;
+> cap live sessions for RAM. Sizable — Opus-plan it. Read `HANDOFF.md` → session P + the
+> `handoff_phase1` memory; also `~/Develop/supernote-dev-reference/README.md` before Supernote
+> work. adb `~/Library/Android/sdk/platform-tools/adb`; `adb connect 100.67.164.61:5555`;
+> package `com.afluffywaffle.avosetta.dev` (launch `.../MainActivity`); build `./gradlew
+> :app:assembleDebug` then `adb -s 100.67.164.61:5555 install -r
+> app/build/outputs/apk/debug/app-debug.apk`. **Driving trick:** `am start -n <launch> -f
+> 0x24000000 --es navUrl <URL>` fires `onNewIntent` + loads the URL + records a visit — the
+> only reliable way to load a page since the IME swallows synthetic text. `LayoutActivity` /
+> `HistoryActivity` are `exported=false`.
+
+<details><summary>Prior kickoff (session O)</summary>
 
 > Resume Avosetta, thread **phase1** (repo `~/Develop/Distesa`, branch **`main`**). Last
 > session (O, 2026-07-18) was a small UI polish — the **Address bar settings pane is now
@@ -18,24 +62,11 @@ _Updated 2026-07-18 (session O)_
 > KDoc on `openPane` (pass `wide = true`, add a horizontal `LinearLayout` with two
 > weight-1 vertical columns, feed each column to `paneSubhead`/`paneRow`/`paneHelp`) — it's
 > opt-in per pane, NOT automatic; every pane still has the `ScrollView` overflow fallback,
-> and `showHelp` uses pagination instead. **NEXT FOCUS (user's pick): browser HISTORY** —
-> the app currently has NO history feature (no visited-page store, no history UI; GeckoView
-> session history is per-session only). Design from scratch: where to persist (a native
-> store keyed by URL+title+timestamp, à la the existing SharedPreferences/StringSet prefs,
-> or Room?), a history UI (likely a new Activity in the `LayoutActivity` hub or a chrome
-> entry point), and how it interacts with the domain strip / address-bar autocomplete.
-> Scope it with the user before building. Read `HANDOFF.md` → session O + N and the
-> `handoff_phase1` memory; also `~/Develop/supernote-dev-reference/README.md` before any
-> Supernote work. adb at `~/Library/Android/sdk/platform-tools/adb`; Nomad `SN078C10005528`
-> @ `100.67.164.61:5555` (wifi); package **`com.afluffywaffle.avosetta.dev`** (launch
-> `com.afluffywaffle.avosetta.dev/com.afluffywaffle.avosetta.MainActivity`); build
-> `./gradlew assembleDebug` then `adb -s SN078C10005528 install -r
-> app/build/outputs/apk/debug/app-debug.apk`. `LayoutActivity` is `exported=false` (can't
-> `am start` it) + IME swallows synthetic text → **human must drive in-app navigation & URL
-> entry**; `adb screencap` DOES capture native settings panes (used it this session), but is
-> unreliable for EPD/Gecko web content. Remaining small UI wins still open (globe outline,
-> nav-strip tap feedback, page-flip calibration, quick-panel latency); bigger pieces =
-> site-exceptions manager, security pillar.
+> and `showHelp` uses pagination instead. **NEXT FOCUS (user's pick): browser HISTORY.**
+> Read `~/Develop/supernote-dev-reference/README.md` before any Supernote work. Nomad
+> `SN078C10005528` @ `100.67.164.61:5555` (wifi); package `com.afluffywaffle.avosetta.dev`.
+
+</details>
 
 <details><summary>Prior kickoff (session N)</summary>
 
@@ -78,6 +109,17 @@ _Updated 2026-07-18 (session O)_
 > `TEST_URL` dev auto-load behind `.dev`.
 
 </details>
+
+### Session 2026-07-18 (P): browser history — store + History page + address-bar autocomplete — COMMITTED `9013ad6` (main, NOT pushed)
+Data layer verified on the **Nomad** (`SN078C10005528` @ `100.67.164.61:5555`, wifi) by reading prefs back via `run-as`. The app had NO history feature before (GeckoView session history is per-session only). Scoped with the user first: **capped JSON store in prefs** (not Room), **hub Activity** UI, autocomplete **included this pass** (user's call), and mid-session the user asked to **cap to 7 days**.
+- **`HistoryStore.kt` (NEW).** Newest-first visit log as ONE JSON string under key `history` in the shared `distesa_settings` prefs — matches the all-SharedPreferences house style, no Room/SQLite. Entry `{u,t,ts}`. Dedup by URL (revisit bumps to front + refreshes ts). **7-day rolling retention** (`RETENTION_MS`) pruned inside `load()` on EVERY read/write (so expired entries also vanish from the History page/autocomplete without browsing) + a **1000-entry backstop** cap. **Redirect-hop collapse:** if the top entry is still untitled and <2.5s old when the next URL lands, it's dropped (a server redirect fires `onLocationChange` for both the hop and the landing — this stops it stacking a dup). All ops read-modify-write the whole blob (negligible at this cap/rate; stateless → every caller consistent).
+- **Recording (`MainActivity`).** `onLocationChange` → `HistoryStore.record(url)` (skips `isBlankUrl`); `onTitleChange` → `HistoryStore.updateTitle(currentUrl, title)` (title arrives after the visit, fires multiple times). Both guarded on `::prefs.isInitialized`.
+- **`HistoryActivity.kt` (NEW)** in the LayoutActivity hub via a new **◷** bordered button (clock glyph, B&W-safe; sits just left of `?`). Mirrors AccessibilityActivity house style. Paginated (`PAGE_SIZE=12`) newest-first, each row = bold title / grey url / relative time + a ✕ to forget it; Clear-all (confirm popup). Tapping a row calls `openUrl` → relaunches `MainActivity` with `putExtra(EXTRA_NAV_URL)` + `FLAG_ACTIVITY_CLEAR_TOP|SINGLE_TOP` then `finish()`. Registered `exported=false` in the manifest.
+- **`onNewIntent` (NEW, `MainActivity`)** + a navUrl branch in `onCreate`: reads `EXTRA_NAV_URL` ("navUrl") and `session.loadUri`s it on the existing session (no recreate). Companion consts `EXTRA_NAV_URL`, `SUGGEST_LIMIT=6`.
+- **Address-bar autocomplete = a CUSTOM inline panel, NOT the framework dropdown.** First attempt used `AutoCompleteTextView`; on-device it dropped the popup **straight behind the IME** (with `adjustNothing` the window never shrinks, so the framework thinks there's room below and never flips up) and it wasn't full-width — user flagged both. Fix: reverted `urlField` to `EditText` + a `TextWatcher`; `buildChromeBar()` now returns a **vertical `col` wrapper** that IS `chromeBar` (owns show/hide/lift/tap-dismiss) containing a new full-width **`suggestBox`** pill + the horizontal `bar` — `[suggestBox][bar]` on bottom chrome (suggestions ABOVE, rising away from the keyboard), `[bar][suggestBox]` on top chrome. `updateSuggestions(q)` fills it from `HistoryStore.query`; `hideSuggestions()` on blur / `showChrome`. Rides the existing IME lift for free. **Deleted `HistorySuggestAdapter.kt`** (the abandoned framework-dropdown adapter).
+- **Files:** `HistoryStore.kt`(new), `HistoryActivity.kt`(new), `MainActivity.kt`, `LayoutActivity.kt`, `AndroidManifest.xml`. Build clean (only pre-existing deprecation warnings).
+- **STILL PENDING:** a human **visual check of the suggestion panel** — I can't drive the IME (swallows synthetic text), so autocomplete's on-screen look is unconfirmed; the data layer + navUrl path ARE verified. **Driving trick discovered:** `am start -n <launch> -f 0x24000000 --es navUrl <URL>` fires `onNewIntent`, loads the URL, and records a visit — the reliable way to load a page from adb.
+- **Discussed, not built (next session):** **Raindrop / extensions-as-favorites** blocked on a missing **browserAction popup surface** (app has ZERO `setActionDelegate`/`WebExtension.Action` — bookmarking extensions can't be logged into/triggered); **TABS** (one GeckoSession/tab + TabManager + overview screen + `onNewSession` + RAM cap) — user has more thoughts + another feature idea to raise.
 
 ### Session 2026-07-18 (O): Address-bar settings pane → two columns — COMMITTED `3af04d4` (main, NOT pushed)
 Small UI polish, verified on the **Nomad** (`SN078C10005528` @ `100.67.164.61:5555`, wifi) via `adb screencap` (works for native panes).

@@ -7,6 +7,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
 import android.text.format.DateUtils
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
@@ -14,6 +15,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import org.mozilla.geckoview.StorageController
 
 /**
  * Avosetta — the History page.
@@ -62,8 +64,16 @@ class HistoryActivity : Activity() {
             if (HistoryStore.all(prefs).isEmpty()) return@makeButton
             confirmImpact(
                 "Clear all history?",
-                "Forgets every page in this list. This can't be undone.",
-            ) { HistoryStore.clear(prefs); page = 0; renderList() }
+                "Forgets every page in this list, and you'll be signed out of websites; caches and site data are wiped. This can't be undone.",
+            ) {
+                HistoryStore.clear(prefs); page = 0; renderList()
+                MainActivity.sharedRuntime(this).storageController
+                    .clearData(StorageController.ClearFlags.ALL)
+                    .accept(
+                        { Log.i("history", "gecko data cleared") },
+                        { e -> Log.w("history", "gecko data clear failed", e) },
+                    )
+            }
         }.apply { textSize = 16f; gravity = Gravity.CENTER_VERTICAL })
         panel.addView(topRow)
 
