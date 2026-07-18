@@ -51,5 +51,11 @@
             android:exported="false"
             android:label="Accessibility"
             android:configChanges="orientation|screenSize|keyboardHidden" />
+
+        <activity
+            android:name=".HistoryActivity"
+            android:exported="false"
+            android:label="History"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
     </application>
 </manifest>

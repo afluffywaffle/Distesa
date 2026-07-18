@@ -157,6 +157,20 @@ class LayoutActivity : Activity() {
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             rightMargin = dp(8)
         })
+        // "◷" opens the History page (newest-first list of visited pages). The clock-face
+        // glyph reads as "recent" and stays B&W on e-ink. Sits just left of the ? button.
+        topBar.addView(Button(this).apply {
+            text = "◷"
+            setTextColor(MainActivity.CHROME_INK)
+            background = borderBg()
+            gravity = Gravity.CENTER
+            textSize = 20f
+            setPadding(dp(20), dp(8), dp(20), dp(8))
+            contentDescription = "History"
+            setOnClickListener { startActivity(Intent(this@LayoutActivity, HistoryActivity::class.java)) }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            rightMargin = dp(8)
+        })
         topBar.addView(Button(this).apply {
             text = "?"
             setTextColor(MainActivity.CHROME_INK)

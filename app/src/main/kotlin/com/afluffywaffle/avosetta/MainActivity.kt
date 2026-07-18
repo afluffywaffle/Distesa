@@ -85,6 +85,9 @@ class MainActivity : Activity() {
 
     // Minimal, mostly-hidden navigation chrome (see buildChromeBar()).
     private lateinit var chromeBar: LinearLayout
+    // Full-width history-autocomplete panel; lives inside the chrome wrapper next to the
+    // address bar so it rides the same IME lift (see buildChromeBar / updateSuggestions).
+    private lateinit var suggestBox: LinearLayout
     private lateinit var urlField: EditText
     private lateinit var backBtn: Button
     // A "go" (→) affordance that appears in the address bar only while the field is
@@ -400,9 +403,16 @@ class MainActivity : Activity() {
             v.onApplyWindowInsets(insets)
         }
 
-        // Start on the blank Chloe home rather than auto-loading a page — the mascot
-        // overlay is visible by default and stays until the user navigates somewhere.
-        setHomeVisible(true)
+        // Open a URL handed in by the History page (which relaunches us with a navUrl
+        // extra), otherwise start on the blank Chloe home — the mascot overlay is visible
+        // by default and stays until the user navigates somewhere.
+        val navUrl = intent?.getStringExtra(EXTRA_NAV_URL)
+        if (!navUrl.isNullOrBlank()) {
+            intent.removeExtra(EXTRA_NAV_URL)
+            session.loadUri(navUrl)
+        } else {
+            setHomeVisible(true)
+        }
 
         ensureUBlock(runtime)
     }
@@ -791,6 +801,18 @@ class MainActivity : Activity() {
             setSelectAllOnFocus(true)
             inputType = InputType.TYPE_TEXT_VARIATION_URI
             imeOptions = EditorInfo.IME_ACTION_GO
+            // History-backed autocomplete. The framework AutoCompleteTextView dropdown is
+            // unusable here: with adjustNothing the window never shrinks for the IME, so it
+            // never flips above the field and drops straight under the keyboard. Instead we
+            // drive a custom full-width suggestion panel that lives inside the chrome (see
+            // suggestBox) and rides the same IME lift as the bar. Each keystroke refreshes it.
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    if (hasFocus()) updateSuggestions(s?.toString() ?: "")
+                }
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            })
             setOnEditorActionListener { _, actionId, event ->
                 // The Supernote keyboard reports its enter key inconsistently — sometimes
                 // GO, sometimes DONE/SEARCH/UNSPECIFIED, sometimes just a raw ENTER key
@@ -841,6 +863,7 @@ class MainActivity : Activity() {
                     setSoftInput(adjustNothing = false)
                     ui.removeCallbacks(imePoll)
                     goBtn?.visibility = View.GONE
+                    hideSuggestions()
                     liftChromeForIme(0)
                     setEdgeNavHidden(false) // restore the edge strips/slivers the IME hid
                     scheduleAutoHide()
@@ -879,7 +902,95 @@ class MainActivity : Activity() {
         makeChromeButton(chromeBtnRight1)?.let { bar.addView(it) }
         makeChromeButton(chromeBtnRight2)?.let { bar.addView(it) }
         bar.addView(gearBtn)
-        return bar
+        bar.visibility = View.VISIBLE // the wrapper (chromeBar) now owns chrome show/hide
+
+        // Full-width history suggestion panel — its own floating pill, hidden until the
+        // field has matches. Same 2px-border / rounded / flat look as the bar.
+        suggestBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(0xFFFAFAFA.toInt())
+                setStroke(dp(2), 0xFF555555.toInt())
+                cornerRadius = dp(10).toFloat()
+            }
+            visibility = View.GONE
+        }
+
+        // Wrapper that IS the chrome (show/hide/lift/tap-dismiss all target chromeBar).
+        // Suggestions sit ABOVE the bar on bottom chrome so they rise away from the IME,
+        // BELOW it on top chrome (where the keyboard never reaches).
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        val barLp = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+        )
+        val sugLp = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
+        )
+        if (chromeAtBottom) {
+            sugLp.bottomMargin = dp(6)
+            col.addView(suggestBox, sugLp)
+            col.addView(bar, barLp)
+        } else {
+            sugLp.topMargin = dp(6)
+            col.addView(bar, barLp)
+            col.addView(suggestBox, sugLp)
+        }
+        return col
+    }
+
+    /** Refresh the history suggestion panel for the current address-field query [q]. */
+    private fun updateSuggestions(q: String) {
+        if (!::suggestBox.isInitialized || !::prefs.isInitialized) return
+        val results = if (q.isBlank()) emptyList()
+            else HistoryStore.query(prefs, q, limit = SUGGEST_LIMIT)
+        suggestBox.removeAllViews()
+        if (results.isEmpty()) {
+            suggestBox.visibility = View.GONE
+            updateEdgeInset()
+            return
+        }
+        results.forEachIndexed { i, e ->
+            if (i > 0) suggestBox.addView(View(this).apply {
+                setBackgroundColor(0x22000000)
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1)
+            })
+            suggestBox.addView(buildSuggestRow(e))
+        }
+        suggestBox.visibility = View.VISIBLE
+        updateEdgeInset()
+    }
+
+    private fun hideSuggestions() {
+        if (!::suggestBox.isInitialized) return
+        suggestBox.removeAllViews()
+        suggestBox.visibility = View.GONE
+    }
+
+    /** One tappable suggestion row: bold title over the grey URL. Tap loads the URL. */
+    private fun buildSuggestRow(e: HistoryStore.Entry): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        isClickable = true
+        setPadding(dp(12), dp(8), dp(12), dp(8))
+        addView(TextView(this@MainActivity).apply {
+            text = if (e.title.isNotEmpty()) e.title else e.url
+            setTextColor(CHROME_INK)
+            textSize = 15f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = e.url
+            setTextColor(CHROME_INK)
+            alpha = 0.55f
+            textSize = 12f
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+        })
+        setOnClickListener { submitUrl(e.url) }
     }
 
     /**
@@ -962,6 +1073,7 @@ class MainActivity : Activity() {
     }
 
     private fun showChrome(autoFocus: Boolean = false) {
+        hideSuggestions() // never flash the previous query's matches on reopen
         chromeBar.visibility = View.VISIBLE
         // The full address bar supersedes the thin domain strip while chrome is up.
         if (::domainBar.isInitialized) domainBar.visibility = View.GONE
@@ -1325,6 +1437,11 @@ class MainActivity : Activity() {
             // Publish the current host so the Accessibility page can offer a per-site
             // "render as-is" toggle for it (that page has no browsing context of its own).
             if (::prefs.isInitialized) prefs.edit().putString("currentHost", hostOf(url)).apply()
+            // Record the visit (the title lands later, via onTitleChange). Skip the blank
+            // home / about:blank so the empty state doesn't pollute history.
+            if (::prefs.isInitialized && !isBlankUrl(url)) url?.let {
+                HistoryStore.record(prefs, it, System.currentTimeMillis())
+            }
             // Keep the (usually hidden) address field in sync when it's not focused.
             if (::urlField.isInitialized && !urlField.hasFocus()) {
                 url?.let { urlField.setText(it) }
@@ -1358,6 +1475,10 @@ class MainActivity : Activity() {
     private val TitleContentDelegate = object : GeckoSession.ContentDelegate {
         override fun onTitleChange(s: GeckoSession, title: String?) {
             currentTitle = title
+            // Backfill the history entry for the current page now that its title is known.
+            if (::prefs.isInitialized && title != null) currentUrl?.let { u ->
+                if (!isBlankUrl(u)) HistoryStore.updateTitle(prefs, u, title)
+            }
             runOnUiThread { updateDomainBar() }
         }
     }
@@ -1892,6 +2013,18 @@ class MainActivity : Activity() {
         ublock = ext
     }
 
+    // Re-entry from the History page: it relaunches us (CLEAR_TOP|SINGLE_TOP) with the
+    // chosen URL rather than recreating, so the load lands on the existing session.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val navUrl = intent.getStringExtra(EXTRA_NAV_URL)
+        if (!navUrl.isNullOrBlank() && ::session.isInitialized) {
+            intent.removeExtra(EXTRA_NAV_URL)
+            session.loadUri(navUrl)
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         if (!::prefs.isInitialized) return
@@ -2038,6 +2171,12 @@ class MainActivity : Activity() {
          * images (infobox + thumbnails) for testing the image-policy modes.
          */
         private const val TEST_URL = "https://en.wikipedia.org/wiki/E_Ink"
+
+        /** Intent extra: a URL for the History page to open in the running MainActivity. */
+        const val EXTRA_NAV_URL = "navUrl"
+
+        /** Max history rows shown in the address-bar autocomplete panel. */
+        private const val SUGGEST_LIMIT = 6
 
         /** Our bundled page-flip extension, loaded from assets via installBuiltIn. */
         private const val EINK_URI = "resource://android/assets/extensions/eink/"
