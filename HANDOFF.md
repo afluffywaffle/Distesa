@@ -22,8 +22,9 @@ _Updated 2026-07-18 (session N)_
 > (`showAddressBarPicker` Focus section), resolved in the strip's tap; (3) the strip doubles
 > as a **coarse e-ink progress bar** — a `ClipDrawable` fill layer of its background advanced
 > by a TIMED CREEP (`domainCreep`, 0→80% in dp steps, 250ms delay / 400ms/step) with Gecko's
-> real `onProgressChange` as a floor (`max(creep, real)`), plus a **⟳** prefix while loading,
-> cleared on page stop — discrete steps, no continuous animation (which ghosts on EPD);
+> real `onProgressChange` as a floor (`max(creep, real)`), plus a **⟳** prefix while loading;
+> on page stop it **snaps to a full 100% bar and holds ~550ms** (`domainClear`) before clearing
+> so completion registers — discrete steps, no continuous animation (which ghosts on EPD);
 > (4) **web-page fields now rise above the Supernote IME** — the panel reports an ime() inset
 > but NEVER resizes the window, so `ADJUST_RESIZE` is a no-op there. Fix: runtime soft-input
 > switch (`setSoftInput` — `ADJUST_NOTHING` only while OUR `urlField` is focused so the custom
@@ -46,11 +47,11 @@ _Updated 2026-07-18 (session N)_
 > **site-exceptions manager**, then the **security pillar**. Optional leftover: gate the removed
 > `TEST_URL` dev auto-load behind `.dev`.
 
-### Session 2026-07-18 (N): domain/title bar + progress fill + web-field IME lift — COMMITTED
+### Session 2026-07-18 (N): domain/title bar + progress fill + web-field IME lift — COMMITTED `643ab56` (main, NOT pushed)
 Verified on the **Nomad** (`SN078C10005528` @ `100.67.164.61:5555`, wifi). User-driven, iterative.
 - **Thin domain/title strip** (`MainActivity`): bordered pill anchored to the chrome edge (same `edge`/inset-between-strips as the chrome bar), 12sp, domain **bold** (`www.` stripped) + title grey, single-line ellipsized. It's the resting state — shown only on a real page while chrome is hidden (`updateDomainBar`), hidden on the Chloe blank home + whenever full chrome is up. **Tap summons the chrome/address bar.** Title via a new minimal `TitleContentDelegate` (`onTitleChange` → `currentTitle`); `onLocationChange` clears the stale title so the new host doesn't briefly show the old title.
 - **Auto-focus decoupler:** the strip's tap resolves focus through `domainFocusMode` (`follow`|`always`|`never`, default follow) — `follow` uses the existing `autoFocusOnReveal`. New "Domain strip focus" radio group in `LayoutActivity.showAddressBarPicker`'s Focus section.
-- **Strip = coarse e-ink progress bar.** Background is a `LayerDrawable[pill, ClipDrawable fill]`; the fill's `level` (0–10000) reveals a light-grey band left→right. Gecko's `onProgressChange` is too coarse (0→~75→done = one flash), so a **timed creep** (`domainCreep`: +20% every 400ms after a 250ms delay, ceiling 80%) supplies steady motion, painted at `max(creep, real)` (`renderDomainProgress`). **⟳** prefix while loading (`domainLoading`), cleared on `onPageStop`. Wired via `PerfProgressDelegate` (added `onPageStart`/`onProgressChange`/`onPageStop` UI hooks).
+- **Strip = coarse e-ink progress bar.** Background is a `LayerDrawable[pill, ClipDrawable fill]`; the fill's `level` (0–10000) reveals a light-grey band left→right. Gecko's `onProgressChange` is too coarse (0→~75→done = one flash), so a **timed creep** (`domainCreep`: +20% every 400ms after a 250ms delay, ceiling 80%) supplies steady motion, painted at `max(creep, real)` (`renderDomainProgress`). **⟳** prefix while loading (`domainLoading`); on `onPageStop` the fill **snaps to 100% and holds ~550ms** (`domainClear` runnable) before clearing, so completion registers instead of flashing away. Wired via `PerfProgressDelegate` (added `onPageStart`/`onProgressChange`/`onPageStop` UI hooks).
 - **Web-field IME lift (the meaty fix).** Problem: web-page inputs stayed under the keyboard. Diagnosis via `dumpsys window`: our window went to `sim={adjust=resize}` AND the IME inset was dispatched (`ITYPE_IME mFrame=[0,1172]…`, ~700px), but the window **frame never shrank** — the Supernote reports the inset without resizing, so `ADJUST_RESIZE` does nothing and GeckoView has no smaller viewport. Fix = two parts: (a) **runtime `setSoftInput`** — `ADJUST_NOTHING` only while `urlField` is focused (custom chrome lift owns it), `ADJUST_RESIZE` otherwise; (b) **manual GeckoView shrink**: `applyImeLift`'s non-our-field branch sets `webImeInsetPx = imeInsetLast`, folded into `updateEdgeInset`'s bottom margin (`maxOf(barInset, webImeInsetPx)`), so we shrink the GeckoView ourselves and Gecko scrolls the focused element up. Full keyboard-height shrink (robust regardless of field position); device-reported inset → scales across panels.
 - **Refactor:** `applyChromeInset(shown)` → **`updateEdgeInset()`** (single source folding chrome bar / domain strip / web-IME bottom insets). Callers in `showChrome`/`hideChrome`/`updateDomainBar`/`applyImeLift`.
 - **Files:** `MainActivity.kt`, `LayoutActivity.kt`. New prefs: `domainFocusMode`.
