@@ -69,35 +69,36 @@ JSON storage, PDF export, and a "Notes" hub list sibling to History.
 
 Each phase compiles, is device-verifiable on the Nomad, and commits on its own.
 
-### Phase 0 — Surface strip in the chrome (small, standalone)
+### Phase 0 — Surfaces in the existing chrome slots (small, standalone, NO new UI)
 
-_Added 2026-07-18 after user discussion; restyled after a "too busy" concern.
-The app's surfaces get a QUIET text row in the chrome; the settings hub becomes
-settings-only. Home-screen placement was rejected: the notepad must be openable
-while ON a page._
+_Added 2026-07-18 after user discussion. Two earlier shapes rejected: a tab/pill
+row ("too busy") and home-screen links (notepad must be openable while ON a
+page). Final shape (user's): repurpose the UI that already exists — no new
+surface, just new defaults + catalog entries._
 
-- `buildChromeBar`'s column gains a **surface slot** above the bar: one container
-  holding BOTH the new `surfaceRow` and the existing `suggestBox`, **mutually
-  exclusive** — surfaces show at rest, `updateSuggestions`/`hideSuggestions` swap
-  in the suggestion panel while the user is typing with matches, back on
-  blur/clear (they never coexist, so the chrome never stacks three rows).
-  Column = `[surface slot][bar]`; rides show/hide + IME lift for free.
-- **Styling: NOT pills.** A single hairline-topped row of plain small text labels,
-  right-aligned — on e-ink, borders read as busy; three words on a line read as
-  almost nothing.
-- **Labels are actions, not tabs** (single-session model preserved):
-  - **Notepad** — opens the split pad bound to the CURRENT page (the frequent
-    mid-browsing action; Phase 2 wires it, Phase 0 ships without it).
-  - **History** — opens `HistoryActivity` (as the hub ◷ does today).
-  - **Reader** — joins whenever reader mode lands. **No dead placeholders**:
-    Phase 0 ships with `History` alone.
-  - The notes LIST is deliberately one level in (pad toolbar's list glyph →
-    `NotesActivity`, Phase 4) — mid-page, "Notepad" means "pad on this page",
-    not "browse my notes".
-- **◷ leaves the `LayoutActivity` hub** in this phase — one way to reach each
-  surface; the hub keeps only settings/config pages.
-- **Verify**: summon chrome → surface row visible, reads quiet; History opens;
-  type in the URL field → suggestions replace the row → blur → row returns.
+- **Principle:** corner slivers = always-present, muscle-memory MECHANICS;
+  the summoned chrome bar = deliberate DESTINATIONS.
+- **New default sliver layout:** top-left **← back**, bottom-left **⌕ address**,
+  top-right **⟳ refresh**, bottom-right **⊟ collapse images** (all four actions
+  already exist in the sliver catalog — this is a defaults change only).
+- **New default chrome-bar slots** (`chromeBtnLeft/Right1/Right2`):
+  **◷ History** / **✎ Notepad** / **(none — reserved for Reader)**. Back/refresh/
+  collapse leave the bar (they live on the slivers now). Bar reads
+  `◷ [url] ✎ ⚙` when done — LESS busy than today's five-glyph bar.
+- **Three new `NavActions` catalog entries** — `history` (◷), `notepad` (✎),
+  `reader` (glyph TBD) — valid in BOTH chrome-slot and sliver contexts, so the
+  whole arrangement stays user-configurable in the layout editor.
+- **No dead placeholders:** Phase 0 ships `history` only (right1 empty until
+  Phase 2 wires `notepad`; right2 empty until reader mode lands — a missing
+  slot renders as nothing, `makeChromeButton` already returns null for it).
+- **◷ leaves the `LayoutActivity` hub** — one way to reach each surface; the
+  hub keeps only settings/config pages.
+- **Defaults migration:** new defaults apply only where prefs are unset —
+  existing configs don't rearrange themselves (reset dev-device prefs on
+  install, or reconfigure once in the editor).
+- **Verify**: fresh-prefs install → sliver corners as above; summon chrome →
+  ◷ opens History; layout editor still reassigns everything; suggestion box
+  unchanged above the bar.
 
 ### Phase 1 — Pen foundation: `PadView` + drawPath port (no browser integration yet)
 
@@ -145,10 +146,9 @@ new `notes/PadView.kt`:
 - **Touch routing**: PadView consumes stylus; `root.onInterceptTouchEvent`'s
   chrome-dismiss gets a `pointInView(padContainer)` exemption so pad taps never
   dismiss/steal. drawPath writable rect = pad's on-screen rect, updated on layout.
-- **Entry point**: the Phase-0 surface row's **Notepad** label (primary), plus an
-  optional `NavActions` entry `notepad` (glyph ✎) for sliver/chrome slots. Opening
-  padMode on a page creates (or reopens — see Phase 3 binding) the note for the
-  current URL.
+- **Entry point**: the `notepad` (✎) `NavActions` entry from Phase 0 becomes
+  functional and takes its default chrome-bar right1 slot. Opening padMode on a
+  page creates (or reopens — see Phase 3 binding) the note for the current URL.
 - **Verify**: adb-drive a page load, toggle padMode via the quick panel (human tap),
   eyeball both orientations, pen on pad + finger-scroll web simultaneously OK.
 
@@ -169,8 +169,8 @@ new `notes/PadView.kt`:
 ### Phase 4 — Hub: `NotesActivity`
 
 - Mirror `HistoryActivity` wholesale: reached via a **list glyph on the pad
-  toolbar** (NOT the surface strip — "Notepad" there means pad-on-this-page —
-  and NOT a hub button, the hub is settings-only now); paginated rows (bold title / grey url / relative time / page count), per-row ✕ +
+  toolbar** (NOT a chrome slot — ✎ there means pad-on-this-page — and NOT a
+  hub button, the hub is settings-only now); paginated rows (bold title / grey url / relative time / page count), per-row ✕ +
   Clear-all via `confirmImpact`, `exported=false`.
 - Row tap → relaunch `MainActivity` with `EXTRA_NAV_URL` = note's url **+ new
   `EXTRA_NOTE_ID`** → `onNewIntent`/`onCreate` loads the page AND opens padMode on
