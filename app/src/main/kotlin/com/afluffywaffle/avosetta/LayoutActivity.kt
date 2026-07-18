@@ -249,8 +249,19 @@ class LayoutActivity : Activity() {
 
     // --- centred picker pane -------------------------------------------------
 
-    /** Open an empty centred pane over a tap-to-dismiss scrim; caller fills it via [build]. */
-    private fun openPane(build: (LinearLayout) -> Unit) {
+    /**
+     * Open an empty centred pane over a tap-to-dismiss scrim; caller fills it via [build].
+     * A [ScrollView] always catches overflow, so no pane can run off-screen.
+     *
+     * TWO-COLUMN PATTERN (for panes that grow too tall on e-ink — see [showAddressBarPicker]):
+     * pass `wide = true` (620dp vs 360dp), then in [build] add a horizontal [LinearLayout]
+     * holding two vertical column [LinearLayout]s (each `LayoutParams(0, WRAP, 1f)`), and feed
+     * the left/right column to [paneSubhead]/[paneRow]/[paneHelp] as their first arg — those
+     * helpers take the target container, so splitting is just a matter of which column you pass.
+     * Where to split (which sections go left vs right) is a per-pane editorial call, so it's not
+     * automated; the alternative for very long content is pagination (see [showHelp]).
+     */
+    private fun openPane(wide: Boolean = false, build: (LinearLayout) -> Unit) {
         dismissModal()
         val scrim = FrameLayout(this).apply {
             setBackgroundColor(0x22000000)
@@ -270,7 +281,7 @@ class LayoutActivity : Activity() {
             isFillViewport = false
             addView(pane, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
         }
-        scrim.addView(scroller, FrameLayout.LayoutParams(dp(360), FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+        scrim.addView(scroller, FrameLayout.LayoutParams(dp(if (wide) 620 else 360), FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
         root.addView(scrim, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         modal = scrim
     }
@@ -490,24 +501,53 @@ class LayoutActivity : Activity() {
      * does (engine, incl. a Custom template). Stays open, re-renders in place; picking
      * Custom reveals a template field ("%s" = the query).
      */
-    private fun showAddressBarPicker() = openPane { pane ->
+    private fun showAddressBarPicker() = openPane(wide = true) { pane ->
         fun render() {
             pane.removeAllViews()
             paneTitle(pane, "Address bar")
-            paneSubhead(pane, "Position")
+            // Two columns so the pane doesn't run off the bottom on e-ink: left holds the
+            // bar's placement + focus behaviour, right holds the search-engine list.
+            val cols = LinearLayout(this@LayoutActivity).apply { orientation = LinearLayout.HORIZONTAL }
+            val left = LinearLayout(this@LayoutActivity).apply { orientation = LinearLayout.VERTICAL }
+            val right = LinearLayout(this@LayoutActivity).apply { orientation = LinearLayout.VERTICAL }
+            cols.addView(left, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(14) })
+            cols.addView(right, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            pane.addView(cols, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+            // LEFT — Position, Focus, Domain strip focus.
+            paneSubhead(left, "Position")
             for ((value, label) in listOf("auto" to "Auto", "top" to "Top", "bottom" to "Bottom"))
-                paneRow(pane, value == chromePos, true, label) {
+                paneRow(left, value == chromePos, true, label) {
                     chromePos = value; prefs.edit().putString("chromePos", value).apply(); preview.invalidate(); render()
                 }
-            paneSubhead(pane, "Search")
-            for (name in MainActivity.SEARCH_ENGINES.keys) paneRow(pane, searchEngine == name, true, name) {
+            paneSubhead(left, "Focus")
+            paneRow(left, autoFocusOnReveal, false, "Auto-focus on open") {
+                autoFocusOnReveal = !autoFocusOnReveal
+                prefs.edit().putBoolean("autoFocusOnReveal", autoFocusOnReveal).apply()
+                render()
+            }
+            paneSubhead(left, "Domain strip focus")
+            paneHelp(left, "Domain strip focus", "The thin domain strip at the edge can follow the setting above when tapped, or always/never put the cursor in the field — set it independently of the sliver.")
+            for ((value, label) in listOf(
+                "follow" to "Follow \"Auto-focus on open\"",
+                "always" to "Always focus",
+                "never" to "Never focus",
+            )) paneRow(left, value == domainFocusMode, true, label) {
+                domainFocusMode = value
+                prefs.edit().putString("domainFocusMode", value).apply()
+                render()
+            }
+
+            // RIGHT — Search engine.
+            paneSubhead(right, "Search")
+            for (name in MainActivity.SEARCH_ENGINES.keys) paneRow(right, searchEngine == name, true, name) {
                 searchEngine = name; prefs.edit().putString("searchEngine", name).apply(); render()
             }
-            paneRow(pane, searchEngine == "Custom", true, "Custom…") {
+            paneRow(right, searchEngine == "Custom", true, "Custom…") {
                 searchEngine = "Custom"; prefs.edit().putString("searchEngine", "Custom").apply(); render()
             }
             if (searchEngine == "Custom") {
-                pane.addView(android.widget.EditText(this@LayoutActivity).apply {
+                right.addView(android.widget.EditText(this@LayoutActivity).apply {
                     setText(customSearchUrl)
                     hint = "https://example.com/search?q=%s"
                     setTextColor(MainActivity.CHROME_INK); setHintTextColor(0xFF999999.toInt())
@@ -522,24 +562,7 @@ class LayoutActivity : Activity() {
                         override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
                     })
                 }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-                paneNote(pane, "Use %s where the search text goes.")
-            }
-            paneSubhead(pane, "Focus")
-            paneRow(pane, autoFocusOnReveal, false, "Auto-focus on open") {
-                autoFocusOnReveal = !autoFocusOnReveal
-                prefs.edit().putBoolean("autoFocusOnReveal", autoFocusOnReveal).apply()
-                render()
-            }
-            paneSubhead(pane, "Domain strip focus")
-            paneHelp(pane, "Domain strip focus", "The thin domain strip at the edge can follow the setting above when tapped, or always/never put the cursor in the field — set it independently of the sliver.")
-            for ((value, label) in listOf(
-                "follow" to "Follow \"Auto-focus on open\"",
-                "always" to "Always focus",
-                "never" to "Never focus",
-            )) paneRow(pane, value == domainFocusMode, true, label) {
-                domainFocusMode = value
-                prefs.edit().putString("domainFocusMode", value).apply()
-                render()
+                paneNote(right, "Use %s where the search text goes.")
             }
         }
         render()
