@@ -5,9 +5,39 @@ Threads: `phase1` (Distesa Phase-1 UI/media/settings + naming) · `avosetta` (re
 ---
 
 ## Thread: phase1
-_Updated 2026-07-18 (session N)_
+_Updated 2026-07-18 (session O)_
 
 ### Next session — paste this to start
+
+> Resume Avosetta, thread **phase1** (repo `~/Develop/Distesa`, branch **`main`**). Last
+> session (O, 2026-07-18) was a small UI polish — the **Address bar settings pane is now
+> two columns** (`showAddressBarPicker` in `LayoutActivity.kt`, COMMITTED `3af04d4`, main,
+> **NOT pushed**): it was running to the bottom edge on e-ink, so it's split into a wider
+> 620dp pane with **left** = Position / Focus / Domain strip focus, **right** = Search
+> engines + Custom. The mechanism is a reusable **TWO-COLUMN PATTERN** documented in the
+> KDoc on `openPane` (pass `wide = true`, add a horizontal `LinearLayout` with two
+> weight-1 vertical columns, feed each column to `paneSubhead`/`paneRow`/`paneHelp`) — it's
+> opt-in per pane, NOT automatic; every pane still has the `ScrollView` overflow fallback,
+> and `showHelp` uses pagination instead. **NEXT FOCUS (user's pick): browser HISTORY** —
+> the app currently has NO history feature (no visited-page store, no history UI; GeckoView
+> session history is per-session only). Design from scratch: where to persist (a native
+> store keyed by URL+title+timestamp, à la the existing SharedPreferences/StringSet prefs,
+> or Room?), a history UI (likely a new Activity in the `LayoutActivity` hub or a chrome
+> entry point), and how it interacts with the domain strip / address-bar autocomplete.
+> Scope it with the user before building. Read `HANDOFF.md` → session O + N and the
+> `handoff_phase1` memory; also `~/Develop/supernote-dev-reference/README.md` before any
+> Supernote work. adb at `~/Library/Android/sdk/platform-tools/adb`; Nomad `SN078C10005528`
+> @ `100.67.164.61:5555` (wifi); package **`com.afluffywaffle.avosetta.dev`** (launch
+> `com.afluffywaffle.avosetta.dev/com.afluffywaffle.avosetta.MainActivity`); build
+> `./gradlew assembleDebug` then `adb -s SN078C10005528 install -r
+> app/build/outputs/apk/debug/app-debug.apk`. `LayoutActivity` is `exported=false` (can't
+> `am start` it) + IME swallows synthetic text → **human must drive in-app navigation & URL
+> entry**; `adb screencap` DOES capture native settings panes (used it this session), but is
+> unreliable for EPD/Gecko web content. Remaining small UI wins still open (globe outline,
+> nav-strip tap feedback, page-flip calibration, quick-panel latency); bigger pieces =
+> site-exceptions manager, security pillar.
+
+<details><summary>Prior kickoff (session N)</summary>
 
 > Resume Avosetta, thread **phase1** (repo `~/Develop/Distesa`, branch **`main`**). Session N
 > (2026-07-18, verified on the **Nomad** `SN078C10005528` @ `100.67.164.61:5555` over wifi)
@@ -46,6 +76,16 @@ _Updated 2026-07-18 (session N)_
 > (~75% + overlap %), (5) **quick-panel latency/feedback**. Bigger pieces after:
 > **site-exceptions manager**, then the **security pillar**. Optional leftover: gate the removed
 > `TEST_URL` dev auto-load behind `.dev`.
+
+</details>
+
+### Session 2026-07-18 (O): Address-bar settings pane → two columns — COMMITTED `3af04d4` (main, NOT pushed)
+Small UI polish, verified on the **Nomad** (`SN078C10005528` @ `100.67.164.61:5555`, wifi) via `adb screencap` (works for native panes).
+- **Problem:** the Address bar picker (`showAddressBarPicker`) had grown a long single column — Position (3) + Search (6) + Focus (1) + Domain strip focus (help + 3) — so on e-ink it ran hard to the bottom edge ("NEVER FOCUS" pinned at the screen bottom).
+- **Fix:** split into two columns in a wider pane. `openPane` gained a `wide` flag (620dp vs 360dp). `showAddressBarPicker` now builds a horizontal `LinearLayout` with two weight-1 vertical columns — **left:** Position, Focus, Domain strip focus; **right:** Search engines + Custom (+ the custom-URL `EditText`/note). Confirmed on-device: fits with headroom, no scroll.
+- **Reusable pattern documented, NOT automated.** Added KDoc on `openPane` describing the two-column recipe (pass `wide = true`; add a horizontal `LinearLayout` of two `LayoutParams(0, WRAP, 1f)` columns; feed each column to `paneSubhead`/`paneRow`/`paneHelp` as their first arg). Where to split is a per-pane editorial call, so future crowded panes opt in the same way. The `ScrollView` in `openPane` remains the universal overflow fallback; `showHelp` uses pagination as the alternative to columns.
+- **Files:** `LayoutActivity.kt` only (`openPane` + `showAddressBarPicker` + KDoc). No new prefs.
+- **Note:** other panes are untouched — this does NOT auto-columnate as panes grow; each must opt in. Left column is the taller one (Domain-strip help text); user accepted the slight imbalance rather than moving Focus to the right.
 
 ### Session 2026-07-18 (N): domain/title bar + progress fill + web-field IME lift — COMMITTED `643ab56` (main, NOT pushed)
 Verified on the **Nomad** (`SN078C10005528` @ `100.67.164.61:5555`, wifi). User-driven, iterative.
