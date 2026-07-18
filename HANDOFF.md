@@ -5,12 +5,61 @@ Threads: `phase1` (Distesa Phase-1 UI/media/settings + naming) · `avosetta` (re
 ---
 
 ## Thread: phase1
-_Updated 2026-07-17 (session M)_
+_Updated 2026-07-18 (session N)_
 
 ### Next session — paste this to start
 
-> Resume Avosetta, thread **phase1** (repo `~/Develop/Distesa`, branch **`main`**, tip
-> `198a171` — **pushed, in sync with `origin/main`**). Session M added **e-ink accessibility
+> Resume Avosetta, thread **phase1** (repo `~/Develop/Distesa`, branch **`main`**). Session N
+> (2026-07-18, verified on the **Nomad** `SN078C10005528` @ `100.67.164.61:5555` over wifi)
+> shipped the **domain/title bar** + **web-field IME lift**, all in `MainActivity.kt` /
+> `LayoutActivity.kt` (COMMITTED — see git log tip; check `git status`/push state). Shipped:
+> (1) a **thin domain/title strip** — bordered pill at the chrome edge, domain (bold, `www.`
+> stripped) + page title (grey), single-line ellipsized; the resting state while chrome is
+> hidden, hidden on the Chloe home + while full chrome is up; **tap = summon the address
+> bar** (`buildDomainBar`/`updateDomainBar`/`domainBarText`, new `TitleContentDelegate` for
+> the title); (2) an **auto-focus decoupler** — new "Domain strip focus" radio group
+> (Follow / Always / Never, pref `domainFocusMode`) in the Address bar settings pane
+> (`showAddressBarPicker` Focus section), resolved in the strip's tap; (3) the strip doubles
+> as a **coarse e-ink progress bar** — a `ClipDrawable` fill layer of its background advanced
+> by a TIMED CREEP (`domainCreep`, 0→80% in dp steps, 250ms delay / 400ms/step) with Gecko's
+> real `onProgressChange` as a floor (`max(creep, real)`), plus a **⟳** prefix while loading,
+> cleared on page stop — discrete steps, no continuous animation (which ghosts on EPD);
+> (4) **web-page fields now rise above the Supernote IME** — the panel reports an ime() inset
+> but NEVER resizes the window, so `ADJUST_RESIZE` is a no-op there. Fix: runtime soft-input
+> switch (`setSoftInput` — `ADJUST_NOTHING` only while OUR `urlField` is focused so the custom
+> chrome lift owns it, `ADJUST_RESIZE` otherwise) PLUS a **manual GeckoView shrink** by the
+> reported inset (`webImeInsetPx`, folded into `updateEdgeInset`'s bottom margin via `maxOf`,
+> set in `applyImeLift`'s non-our-field branch) so Gecko scrolls the focused element into the
+> smaller viewport. Uses the device-reported inset → scales across screen sizes. NOTE:
+> `applyChromeInset(shown)` was refactored → `updateEdgeInset()` (folds chrome bar / domain
+> strip / web-IME insets into one). Read `HANDOFF.md` → session N + `handoff_phase1` memory;
+> also `~/Develop/supernote-dev-reference/README.md` before Supernote work. adb at
+> `~/Library/Android/sdk/platform-tools/adb`; package **`com.afluffywaffle.avosetta.dev`**
+> (launch `com.afluffywaffle.avosetta.dev/com.afluffywaffle.avosetta.MainActivity`); build
+> `./gradlew :app:assembleDebug` then `adb -s SN078C10005528 install -r
+> app/build/outputs/apk/debug/app-debug.apk`. No VIEW intent filter + IME swallows synthetic
+> text → **human must drive page loads/URL entry**. **Remaining UI/UX easy wins (user's call,
+> in order):** (1) **globe sliver white outline** (`GlobeSearchDrawable.kt`, tiny), (2) **e-ink
+> tap feedback on nav strip** (`EdgeNavView` static outline on ACTION_DOWN), (3) **auto-focus
+> address on chrome reveal** (dedicated affordance only), (4) **page-flip distance calibration**
+> (~75% + overlap %), (5) **quick-panel latency/feedback**. Bigger pieces after:
+> **site-exceptions manager**, then the **security pillar**. Optional leftover: gate the removed
+> `TEST_URL` dev auto-load behind `.dev`.
+
+### Session 2026-07-18 (N): domain/title bar + progress fill + web-field IME lift — COMMITTED
+Verified on the **Nomad** (`SN078C10005528` @ `100.67.164.61:5555`, wifi). User-driven, iterative.
+- **Thin domain/title strip** (`MainActivity`): bordered pill anchored to the chrome edge (same `edge`/inset-between-strips as the chrome bar), 12sp, domain **bold** (`www.` stripped) + title grey, single-line ellipsized. It's the resting state — shown only on a real page while chrome is hidden (`updateDomainBar`), hidden on the Chloe blank home + whenever full chrome is up. **Tap summons the chrome/address bar.** Title via a new minimal `TitleContentDelegate` (`onTitleChange` → `currentTitle`); `onLocationChange` clears the stale title so the new host doesn't briefly show the old title.
+- **Auto-focus decoupler:** the strip's tap resolves focus through `domainFocusMode` (`follow`|`always`|`never`, default follow) — `follow` uses the existing `autoFocusOnReveal`. New "Domain strip focus" radio group in `LayoutActivity.showAddressBarPicker`'s Focus section.
+- **Strip = coarse e-ink progress bar.** Background is a `LayerDrawable[pill, ClipDrawable fill]`; the fill's `level` (0–10000) reveals a light-grey band left→right. Gecko's `onProgressChange` is too coarse (0→~75→done = one flash), so a **timed creep** (`domainCreep`: +20% every 400ms after a 250ms delay, ceiling 80%) supplies steady motion, painted at `max(creep, real)` (`renderDomainProgress`). **⟳** prefix while loading (`domainLoading`), cleared on `onPageStop`. Wired via `PerfProgressDelegate` (added `onPageStart`/`onProgressChange`/`onPageStop` UI hooks).
+- **Web-field IME lift (the meaty fix).** Problem: web-page inputs stayed under the keyboard. Diagnosis via `dumpsys window`: our window went to `sim={adjust=resize}` AND the IME inset was dispatched (`ITYPE_IME mFrame=[0,1172]…`, ~700px), but the window **frame never shrank** — the Supernote reports the inset without resizing, so `ADJUST_RESIZE` does nothing and GeckoView has no smaller viewport. Fix = two parts: (a) **runtime `setSoftInput`** — `ADJUST_NOTHING` only while `urlField` is focused (custom chrome lift owns it), `ADJUST_RESIZE` otherwise; (b) **manual GeckoView shrink**: `applyImeLift`'s non-our-field branch sets `webImeInsetPx = imeInsetLast`, folded into `updateEdgeInset`'s bottom margin (`maxOf(barInset, webImeInsetPx)`), so we shrink the GeckoView ourselves and Gecko scrolls the focused element up. Full keyboard-height shrink (robust regardless of field position); device-reported inset → scales across panels.
+- **Refactor:** `applyChromeInset(shown)` → **`updateEdgeInset()`** (single source folding chrome bar / domain strip / web-IME bottom insets). Callers in `showChrome`/`hideChrome`/`updateDomainBar`/`applyImeLift`.
+- **Files:** `MainActivity.kt`, `LayoutActivity.kt`. New prefs: `domainFocusMode`.
+- **Gotchas:** progress fill contrast `0xFFD2D2D2` (light so black text stays legible over it). `adb screencap` still unreliable for EPD/Gecko content — drove by logcat + `dumpsys window`/`input_method`.
+
+### Session 2026-07-17 (M): e-ink accessibility levers + per-site "render as-is" + chrome tap-to-dismiss — COMMITTED + PUSHED (`198a171`, `origin/main`)
+Verified on the **Manta** (Nomad unreachable over Tailscale all session). User-driven, iterative.
+- **Why:** user asked whether we enforce e-ink accessibility (light backgrounds) — we enforced NOTHING before (dark-theme sites rendered muddy grey on the panel). Grew into a contrast feature, then a per-site "render as-is" escape hatch.
+- **Accessibility levers (both default ON), new `AccessibilityActivity.kt`** reached via a bordered **◐** button in the `LayoutActivity` top-bar hub (between Extensions and `?`; ◐ = contrast glyph, B&W-safe vs the colour ♿ emoji):
 > + per-site "render as-is"**, all committed+pushed and verified on the **Manta**
 > (`SN100C10008955` @ `100.98.2.91:5555` — **Nomad was unreachable over Tailscale all
 > session**). Shipped: (1) two contrast levers in a **new `AccessibilityActivity`** (◐ button

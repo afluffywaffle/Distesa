@@ -5,15 +5,24 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.ClipDrawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.text.InputType
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.TextUtils
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
 import android.util.Log
 import android.view.Gravity
 import android.view.WindowInsets
+import android.view.WindowManager
 import android.graphics.Rect
 import android.view.MotionEvent
 import android.view.View
@@ -24,6 +33,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.appcompat.widget.SwitchCompat
 import androidx.core.content.ContextCompat
 import com.afluffywaffle.avosetta.eink.EdgeNavView
@@ -82,6 +92,22 @@ class MainActivity : Activity() {
     private var goBtn: Button? = null
     private var canGoBack = false
     private var currentUrl: String? = null
+    private var currentTitle: String? = null
+
+    // A thin, always-on wayfinding strip showing the current domain (+ page title),
+    // anchored to the same edge as the chrome bar. Tapping it summons the chrome/address
+    // bar. Hidden on the blank home and while the full chrome is up (redundant there).
+    private lateinit var domainBar: TextView
+    // The strip doubles as a coarse e-ink progress bar: a left→right fill (the clip layer
+    // of the strip's background) advanced in a few discrete buckets, plus a ⟳ prefix while
+    // a load is in flight. Discrete steps keep EPD refreshes to a handful, not a stream.
+    private lateinit var domainFill: ClipDrawable
+    private var domainLoading = false
+    // Gecko reports progress in a few coarse jumps (often 0 → ~75 → done), which reads as a
+    // single flash. So we drive an indeterminate CREEP on a timer while loading and show the
+    // MAX of the creep and Gecko's real value — guaranteeing steady left→right motion.
+    private var domainCreepPct = 0
+    private var domainRealPct = 0
     // Chloe "home" mascot: a full-bleed overlay above the (opaque) GeckoView, shown only
     // when no real page is loaded — the empty/new-tab state. Hidden the moment a real URL
     // loads (see setHomeVisible / onLocationChange).
@@ -129,6 +155,9 @@ class MainActivity : Activity() {
     // one-tap "type an address" affordance; back/⟳ stay reachable on the revealed bar
     // (and can be put on the other sliver). Never fires on the idle-timer reveal.
     private var autoFocusOnReveal = false
+    // How a tap on the thin domain strip decides auto-focus, independent of the sliver:
+    // "follow" = use autoFocusOnReveal, "always" = focus, "never" = don't. (LayoutActivity.)
+    private var domainFocusMode = "follow"
 
     // E-ink performance levers (persisted in SharedPreferences; see loadSettings()).
     private var animOff = true          // inject animation/transition-killing CSS
@@ -233,6 +262,7 @@ class MainActivity : Activity() {
         session.settings.setAllowJavascript(jsEnabled)
         session.progressDelegate = PerfProgressDelegate
         session.navigationDelegate = EtpNavigationDelegate
+        session.contentDelegate = TitleContentDelegate
         session.permissionDelegate = DenyPermissionDelegate
         session.scrollDelegate = EinkScrollDelegate
 
@@ -305,6 +335,22 @@ class MainActivity : Activity() {
         // banners put their buttons, so those stay tappable. Chrome hides via its sliver
         // toggle or a tap off the chrome (root.onInterceptTouchEvent); no idle timeout.
 
+        // Thin always-on domain/title strip at the adaptive edge, inset between the
+        // strips exactly like the chrome bar. It's the resting state (chrome hidden):
+        // shows where you are and, on tap, summons the full chrome/address bar. Added
+        // BEFORE the chrome bar so the chrome sits above it in z-order.
+        domainBar = buildDomainBar()
+        root.addView(
+            domainBar,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, edge,
+            ).apply {
+                leftMargin = if (navPlacement != "right") stripW else CHROME_EDGE_GAP
+                rightMargin = if (navPlacement != "left") stripW else CHROME_EDGE_GAP
+                if (chromeAtBottom) bottomMargin = CHROME_EDGE_GAP else topMargin = CHROME_EDGE_GAP
+            },
+        )
+
         // Chrome bar (hidden by default) at the adaptive edge. Inset horizontally by
         // the strip width on each side that has a strip, so the bar sits BETWEEN the
         // strips and never overlaps their bottom edge slivers (☰/⊟) — those stay
@@ -338,10 +384,16 @@ class MainActivity : Activity() {
         )
         setContentView(root)
 
+        // Default the window to ADJUST_RESIZE so that when a WEB-PAGE field is focused the
+        // window shrinks by the IME and GeckoView scrolls the focused element into view.
+        // We flip to ADJUST_NOTHING only while OUR address field is focused (see urlField's
+        // focus listener), where a resize would fight the custom lift we apply to the bar.
+        setSoftInput(adjustNothing = false)
+
         // Keep the chrome bar sitting just above the on-screen input window while the
-        // address field is focused. windowSoftInputMode=adjustNothing means the system
-        // won't move anything for us, so we read the live IME inset and lift the bar by
-        // exactly that height (adapts to any keyboard/panel; see liftChromeForIme).
+        // address field is focused. When our field is focused the mode is ADJUST_NOTHING,
+        // so the system won't move anything for us — we read the live IME inset and lift the
+        // bar by exactly that height (adapts to any keyboard/panel; see liftChromeForIme).
         root.setOnApplyWindowInsetsListener { v, insets ->
             imeInsetLast = insets.getInsets(WindowInsets.Type.ime()).bottom
             applyImeLift()
@@ -591,6 +643,126 @@ class MainActivity : Activity() {
 
     // --- Minimal navigation chrome ------------------------------------------
 
+    /**
+     * The thin resting-state strip: ~1/3 the chrome height, a bordered pill showing the
+     * current domain (bold) and page title (grey), single-line and ellipsized. Tapping it
+     * reveals the full chrome/address bar (honouring the auto-focus setting), so it doubles
+     * as a summon affordance. Legibility on e-ink wins over shaving the last px of height.
+     */
+    private fun buildDomainBar(): TextView {
+        // Layer 0: the pill (fill + border). Layer 1: a clip-drawable fill advanced by
+        // level (0..10000) that reveals a light-grey band left→right — the progress bar.
+        // The fill is inset by the stroke so it sits inside the border, and stays light
+        // enough that the black domain text remains legible over it.
+        val base = GradientDrawable().apply {
+            setColor(0xFFFAFAFA.toInt())
+            setStroke(dp(1), 0xFF999999.toInt())
+            cornerRadius = dp(8).toFloat()
+        }
+        domainFill = ClipDrawable(
+            GradientDrawable().apply { setColor(0xFFD2D2D2.toInt()); cornerRadius = dp(7).toFloat() },
+            Gravity.START, ClipDrawable.HORIZONTAL,
+        ).apply { level = 0 }
+        val bg = LayerDrawable(arrayOf(base, domainFill)).apply { setLayerInset(1, dp(1), dp(1), dp(1), dp(1)) }
+        return TextView(this).apply {
+            setTextColor(CHROME_INK)
+            textSize = 12f
+            setSingleLine()
+            ellipsize = TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(2), dp(12), dp(2))
+            background = bg
+            visibility = View.GONE
+            setOnClickListener {
+                val focus = when (domainFocusMode) {
+                    "always" -> true
+                    "never" -> false
+                    else -> autoFocusOnReveal
+                }
+                showChrome(focus)
+            }
+        }
+    }
+
+    /** ⟳ (while loading) + domain (bold) + title (grey), collapsing to just the domain
+     *  when the title is empty or identical to the host. */
+    private fun domainBarText(): CharSequence {
+        val host = hostOf(currentUrl).removePrefix("www.").ifBlank { currentUrl.orEmpty() }
+        val title = currentTitle?.trim().orEmpty()
+        val prefix = if (domainLoading) "⟳ " else ""
+        val hostEnd = prefix.length + host.length
+        val body = if (title.isEmpty() || title.equals(host, ignoreCase = true)) {
+            "$prefix$host"
+        } else {
+            "$prefix$host   $title"
+        }
+        return SpannableString(body).apply {
+            setSpan(StyleSpan(Typeface.BOLD), prefix.length, hostEnd, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+            if (body.length > hostEnd) setSpan(
+                ForegroundColorSpan(0xFF777777.toInt()),
+                hostEnd, body.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
+            )
+        }
+    }
+
+    /** Paint the fill at max(creep, real). Level is 0..10000; ~5 discrete steps in practice
+     *  so the EPD only refreshes a handful of times per load. */
+    private fun renderDomainProgress() {
+        if (!::domainFill.isInitialized) return
+        val pct = maxOf(domainCreepPct, domainRealPct).coerceIn(0, 100)
+        domainFill.level = pct * 100
+        domainBar.invalidate()
+    }
+
+    /** Indeterminate creep: bump the fill one step every beat up to a ceiling (never
+     *  reaching 100 on its own — the page stop does that), so there's always visible
+     *  motion even when Gecko stays silent. Stops as soon as the load ends. */
+    private val domainCreep = object : Runnable {
+        override fun run() {
+            if (!domainLoading) return
+            if (domainCreepPct < 80) { domainCreepPct += 20; renderDomainProgress() }
+            if (domainCreepPct < 80) ui.postDelayed(this, 400)
+        }
+    }
+
+    /** Clears the fill after the brief full-bar hold on page stop. */
+    private val domainClear = Runnable {
+        domainCreepPct = 0; domainRealPct = 0; renderDomainProgress()
+    }
+
+    /** Flip the loading state: set/clear the ⟳ prefix, start/stop the creep, refresh. */
+    private fun setDomainLoading(loading: Boolean) {
+        domainLoading = loading
+        ui.removeCallbacks(domainCreep)
+        ui.removeCallbacks(domainClear)
+        if (loading) {
+            domainCreepPct = 0
+            domainRealPct = 0
+            renderDomainProgress()     // reset the fill
+            updateDomainBar()          // show ⟳
+            ui.postDelayed(domainCreep, 250)
+        } else {
+            // Snap the fill to full and hold it a beat so the completed bar actually
+            // registers on the EPD, then clear — otherwise it flashes 100% and vanishes.
+            domainCreepPct = 100
+            domainRealPct = 100
+            renderDomainProgress()     // paint the full bar
+            updateDomainBar()          // drop the ⟳
+            ui.postDelayed(domainClear, 550)
+        }
+    }
+
+    /** Show the domain strip only on a real page while the full chrome is hidden; refresh
+     *  its text and re-apply the web-view inset whenever that state changes. */
+    private fun updateDomainBar() {
+        if (!::domainBar.isInitialized) return
+        val chromeUp = ::chromeBar.isInitialized && chromeBar.visibility == View.VISIBLE
+        val show = !isBlankUrl(currentUrl) && !chromeUp
+        if (show) domainBar.text = domainBarText()
+        domainBar.visibility = if (show) View.VISIBLE else View.GONE
+        domainBar.post { updateEdgeInset() }
+    }
+
     private fun buildChromeBar(): LinearLayout {
         val bar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -648,6 +820,9 @@ class MainActivity : Activity() {
             // of it. Restored to the configured edge on blur.
             setOnFocusChangeListener { _, hasFocus ->
                 if (hasFocus) {
+                    // Own the IME ourselves while typing an address: ADJUST_NOTHING so the
+                    // system doesn't resize under us — the manual lift positions the bar.
+                    setSoftInput(adjustNothing = true)
                     ui.removeCallbacks(autoHide)
                     goBtn?.visibility = View.VISIBLE // reveal the → submit affordance
                     // Explicitly show + bind the IME to this field: adjustNothing
@@ -662,6 +837,8 @@ class MainActivity : Activity() {
                     // firing an inset event, so poll the true IME height while focused.
                     ui.removeCallbacks(imePoll); ui.post(imePoll)
                 } else {
+                    // Back to ADJUST_RESIZE so web-page fields get scrolled above the IME.
+                    setSoftInput(adjustNothing = false)
                     ui.removeCallbacks(imePoll)
                     goBtn?.visibility = View.GONE
                     liftChromeForIme(0)
@@ -786,11 +963,13 @@ class MainActivity : Activity() {
 
     private fun showChrome(autoFocus: Boolean = false) {
         chromeBar.visibility = View.VISIBLE
+        // The full address bar supersedes the thin domain strip while chrome is up.
+        if (::domainBar.isInitialized) domainBar.visibility = View.GONE
         currentUrl?.let { urlField.setText(it) }
         // Shrink the web viewport by the chrome height so the bar doesn't cover the
         // bottom (or top) of the page — otherwise a position:fixed banner (GDPR /
         // cookie consent) sits under the bar and its buttons can't be tapped.
-        chromeBar.post { applyChromeInset(true) }
+        chromeBar.post { updateEdgeInset() }
         scheduleAutoHide()
         if (autoFocus) {
             // requestFocus fires the field's OnFocusChangeListener, which shows the IME,
@@ -821,6 +1000,9 @@ class MainActivity : Activity() {
     private var imeHeightResolved = false
     // Last ime() inset the window dispatched (fallback signal; under-reports the strip).
     private var imeInsetLast = 0
+    // Bottom inset (px) we apply to the GeckoView to lift a focused WEB-PAGE field above the
+    // IME (the Supernote won't resize the window for us). 0 unless a web field has the IME up.
+    private var webImeInsetPx = 0
 
     /**
      * True visible height (px) of the on-screen input window INCLUDING the Supernote
@@ -869,7 +1051,16 @@ class MainActivity : Activity() {
         // the chevrons/slivers hovering over the keyboard read as out of place. Restored
         // when focus clears (dismiss / hideChrome), which is also when the IME goes away.
         setEdgeNavHidden(focused)
-        if (!focused) { liftChromeForIme(0); return }
+        if (!focused) {
+            // Not our address bar → the IME (if up) belongs to a focused WEB-PAGE field.
+            // Shrink the GeckoView by the inset so Gecko lifts that field above the keyboard.
+            liftChromeForIme(0)
+            val webInset = imeInsetLast
+            if (webImeInsetPx != webInset) { webImeInsetPx = webInset; updateEdgeInset() }
+            return
+        }
+        // Our address bar owns the IME here: no web-field inset, use the custom lift instead.
+        if (webImeInsetPx != 0) { webImeInsetPx = 0; updateEdgeInset() }
         val trueH = imeWindowVisibleHeight()
         val lift = when {
             trueH > 0 -> trueH
@@ -909,7 +1100,8 @@ class MainActivity : Activity() {
         liftChromeForIme(0) // drop any IME lift so the next reveal sits at the edge
         chromeBar.visibility = View.GONE
         settingsPanel.visibility = View.GONE
-        applyChromeInset(false)
+        // Restore the thin domain strip (and its inset) now that the full chrome is down.
+        updateDomainBar()
         dismissAddressIme()
     }
 
@@ -918,6 +1110,18 @@ class MainActivity : Activity() {
      * input. Clearing focus fires urlField's blur branch (restore edge nav, drop
      * the IME lift). Safe to call when the field isn't focused / the IME is down.
      */
+    /**
+     * Switch the window's soft-input mode at runtime: ADJUST_NOTHING while our own address
+     * field is focused (the custom lift owns positioning), ADJUST_RESIZE otherwise so a
+     * focused WEB-PAGE field triggers a window resize and GeckoView scrolls it above the IME.
+     */
+    private fun setSoftInput(adjustNothing: Boolean) {
+        window.setSoftInputMode(
+            if (adjustNothing) WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+            else WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE,
+        )
+    }
+
     private fun dismissAddressIme() {
         if (!::urlField.isInitialized) return
         urlField.clearFocus()
@@ -926,16 +1130,27 @@ class MainActivity : Activity() {
     }
 
     /**
-     * Inset the GeckoView by the chrome bar's height on the chrome edge while it's
-     * visible, restoring to flush when hidden. Preserves the inset-mode left/right
-     * paging margins. The reflow this triggers is intentional — it lifts fixed
-     * bottom/top page furniture (consent banners) out from under the bar.
+     * Inset the GeckoView on the chrome edge by whichever edge bar is currently up: the
+     * full chrome bar when it's visible, else the thin domain strip, else flush. Preserves
+     * the inset-mode left/right paging margins. The reflow this triggers is intentional —
+     * it lifts fixed bottom/top page furniture (consent banners) out from under the bar.
      */
-    private fun applyChromeInset(shown: Boolean) {
+    private fun updateEdgeInset() {
         val lp = view.layoutParams as? FrameLayout.LayoutParams ?: return
-        val inset = if (shown) chromeBar.height.coerceAtLeast(dp(52)) else 0
+        val inset = when {
+            ::chromeBar.isInitialized && chromeBar.visibility == View.VISIBLE ->
+                chromeBar.height.coerceAtLeast(dp(52))
+            ::domainBar.isInitialized && domainBar.visibility == View.VISIBLE ->
+                domainBar.height.coerceAtLeast(dp(20)) + CHROME_EDGE_GAP
+            else -> 0
+        }
         val newTop = if (chromeAtBottom) 0 else inset
-        val newBottom = if (chromeAtBottom) inset else 0
+        // The Supernote reports an IME inset but never resizes the window, so ADJUST_RESIZE
+        // is a no-op there and a focused WEB-PAGE field stays under the keyboard. When one
+        // is being edited we shrink the GeckoView from the bottom by that inset ourselves —
+        // Gecko then scrolls the focused element into the smaller viewport. (webImeInsetPx
+        // is 0 unless a web field, not our address bar, has the IME up.)
+        val newBottom = maxOf(if (chromeAtBottom) inset else 0, webImeInsetPx)
         if (lp.topMargin == newTop && lp.bottomMargin == newBottom) return
         lp.topMargin = newTop
         lp.bottomMargin = newBottom
@@ -1013,6 +1228,7 @@ class MainActivity : Activity() {
         edgeSlotRightTop = prefs.getString("edgeSlotRightTop", "none") ?: "none"
         edgeSlotRightBottom = prefs.getString("edgeSlotRightBottom", "collapse") ?: "collapse"
         autoFocusOnReveal = prefs.getBoolean("autoFocusOnReveal", false)
+        domainFocusMode = prefs.getString("domainFocusMode", "follow") ?: "follow"
         // Lockout guard: with tap-to-dismiss and the centre reveal-strip gone, a chrome
         // sliver is the ONLY way to open the toolbar (and thus settings). "left"/"right"
         // (single strip) and "none" (floating button) always guarantee a chrome
@@ -1099,10 +1315,13 @@ class MainActivity : Activity() {
             hasUserGesture: Boolean,
         ) {
             currentUrl = url
+            // The title arrives via onTitleChange; clear the stale one so the domain strip
+            // doesn't briefly show the previous page's title against the new host.
+            currentTitle = null
             // Reveal the Chloe home only in the blank state; hide it once a real page loads.
             setHomeVisible(isBlankUrl(url))
-            // Refresh the quick-panel "Render as-is" label for the new host.
-            runOnUiThread { updateRawBtn() }
+            // Refresh the quick-panel "Render as-is" label + the thin domain strip.
+            runOnUiThread { updateRawBtn(); updateDomainBar() }
             // Publish the current host so the Accessibility page can offer a per-site
             // "render as-is" toggle for it (that page has no browsing context of its own).
             if (::prefs.isInitialized) prefs.edit().putString("currentHost", hostOf(url)).apply()
@@ -1130,6 +1349,17 @@ class MainActivity : Activity() {
             uri: String?,
             error: org.mozilla.geckoview.WebRequestError,
         ): GeckoResult<String>? = GeckoResult.fromValue(buildErrorPage(uri, error))
+    }
+
+    /**
+     * Tracks the page title for the thin domain strip. The title lands after the location
+     * change (and can update again during load), so we refresh the strip on each callback.
+     */
+    private val TitleContentDelegate = object : GeckoSession.ContentDelegate {
+        override fun onTitleChange(s: GeckoSession, title: String?) {
+            currentTitle = title
+            runOnUiThread { updateDomainBar() }
+        }
     }
 
     /**
@@ -1356,9 +1586,19 @@ class MainActivity : Activity() {
         override fun onPageStart(s: GeckoSession, url: String) {
             pageStartMs = SystemClock.elapsedRealtime()
             pageHost = try { java.net.URI(url).host ?: url } catch (e: Throwable) { url }
+            runOnUiThread { setDomainLoading(true) }
+        }
+
+        override fun onProgressChange(s: GeckoSession, progress: Int) {
+            // Feed Gecko's real value in as a floor; the creep timer supplies steady motion
+            // between these coarse jumps. renderDomainProgress no-ops when the level is equal.
+            runOnUiThread {
+                if (progress > domainRealPct) { domainRealPct = progress; renderDomainProgress() }
+            }
         }
 
         override fun onPageStop(s: GeckoSession, success: Boolean) {
+            runOnUiThread { setDomainLoading(false) }
             if (pageStartMs <= 0L) return
             val ms = SystemClock.elapsedRealtime() - pageStartMs
             pageStartMs = 0L

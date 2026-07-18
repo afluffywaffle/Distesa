@@ -54,6 +54,7 @@ class LayoutActivity : Activity() {
     private var searchEngine = "DuckDuckGo"
     private var customSearchUrl = ""
     private var autoFocusOnReveal = false
+    private var domainFocusMode = "follow" // follow | always | never
 
     private lateinit var root: FrameLayout
     private lateinit var preview: PreviewView
@@ -77,6 +78,7 @@ class LayoutActivity : Activity() {
         searchEngine = prefs.getString("searchEngine", "DuckDuckGo") ?: "DuckDuckGo"
         customSearchUrl = prefs.getString("customSearchUrl", "") ?: ""
         autoFocusOnReveal = prefs.getBoolean("autoFocusOnReveal", false)
+        domainFocusMode = prefs.getString("domainFocusMode", "follow") ?: "follow"
 
         title = "Layout"
 
@@ -526,6 +528,17 @@ class LayoutActivity : Activity() {
             paneRow(pane, autoFocusOnReveal, false, "Auto-focus on open") {
                 autoFocusOnReveal = !autoFocusOnReveal
                 prefs.edit().putBoolean("autoFocusOnReveal", autoFocusOnReveal).apply()
+                render()
+            }
+            paneSubhead(pane, "Domain strip focus")
+            paneHelp(pane, "Domain strip focus", "The thin domain strip at the edge can follow the setting above when tapped, or always/never put the cursor in the field — set it independently of the sliver.")
+            for ((value, label) in listOf(
+                "follow" to "Follow \"Auto-focus on open\"",
+                "always" to "Always focus",
+                "never" to "Never focus",
+            )) paneRow(pane, value == domainFocusMode, true, label) {
+                domainFocusMode = value
+                prefs.edit().putString("domainFocusMode", value).apply()
                 render()
             }
         }
